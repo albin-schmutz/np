@@ -1,0 +1,43 @@
+MODULE EnvLayer;
+
+IMPORT Files, In, Out;
+
+
+PROCEDURE Exit*(exitNr : INTEGER);
+
+  BEGIN
+    HALT(exitNr)
+  END Exit;
+
+
+PROCEDURE GetChar*(VAR ch : INTEGER);
+
+  VAR c : CHAR;
+
+  BEGIN
+    In.Char(c); ch := ORD(c)
+  END GetChar;
+
+
+PROCEDURE PutChar*(ch : INTEGER);
+
+  BEGIN
+    Out.Char(CHR(ch))
+  END PutChar;
+
+
+PROCEDURE WriteFile*(ints : ARRAY OF INTEGER);
+
+  VAR f : Files.File; i : INTEGER;
+
+  BEGIN
+    f := Files.Open("out", "wb");
+    i := 0;
+    WHILE ints[i] # -1 DO
+      Files.Write(f, ints[i]); i := i + 1
+    END;
+    Files.Close(f)
+  END WriteFile;
+
+
+END EnvLayer.

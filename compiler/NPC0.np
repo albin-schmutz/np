@@ -1,0 +1,105 @@
+MODULE NPC0;
+
+IMPORT EnvLayer;
+
+
+CONST
+
+  MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
+  MaxLenInt = 11;
+
+
+VAR
+
+  envParam : INTEGER;
+  code : ARRAY 10 OF INTEGER;
+
+
+(* sys calls *)
+
+
+PROCEDURE SysCall(nr : INTEGER);
+
+  BEGIN
+    IF nr = -1 THEN
+      EnvLayer.Exit(envParam)
+    ELSIF nr = -2 THEN
+      EnvLayer.GetChar(envParam)
+    ELSIF nr = -3 THEN
+      EnvLayer.PutChar(envParam)
+    ELSIF nr = -4 THEN
+      EnvLayer.WriteFile(code)
+    END
+  END SysCall;
+
+
+(* print procedures *)
+
+
+PROCEDURE PrintChar(char : INTEGER);
+
+  BEGIN
+    envParam := char;
+    SysCall(-3)
+  END PrintChar;
+
+
+PROCEDURE PrintChars(chars : INTEGER);
+
+  BEGIN
+    IF chars > 0 THEN
+      PrintChars(chars DIV 256);
+      PrintChar(chars MOD 256)
+    END
+  END PrintChars;
+
+
+PROCEDURE PrintInt(int : INTEGER);
+
+  VAR
+    i : INTEGER;
+    tmpBuf : ARRAY MaxLenInt + 1 OF CHAR;
+
+  BEGIN
+    i := 0;
+    IF int = MinInt THEN
+      (* -2147483648 *)
+      PrintChars(2D323134H);
+      PrintChars(37343833H);
+      PrintChars(363438H);
+      int := 0
+    ELSIF int < 0 THEN
+      PrintChar(2DH (*-*));
+      int := -int
+    ELSIF int = 0 THEN
+      tmpBuf[0] := 30X (*0*);
+      i := i + 1
+    END;
+    WHILE int # 0 DO
+      tmpBuf[i] := CHR(30H + int MOD 10);
+      i := i + 1;
+      int := int DIV 10
+    END;
+    WHILE i > 0 DO
+      i := i - 1;
+      PrintChar(ORD(tmpBuf[i]))
+    END
+  END PrintInt;
+
+
+BEGIN
+  SysCall(-2); SysCall(-3);
+  envParam := 10; SysCall(-3);
+  envParam := 65; SysCall(-3);
+  envParam := 66; SysCall(-3);
+  envParam := 67; SysCall(-3);
+  envParam := 10; SysCall(-3);
+  PrintInt(0); PrintChars(0AH);
+  PrintInt(-1); PrintChars(0AH);
+  PrintInt(MaxInt); PrintChars(0AH);
+  PrintInt(MinInt); PrintChars(0AH);
+  code[1] := 26101969H;
+  code[2] := 26111956H;
+  code[3] := -1;
+  SysCall(-4)
+END NPC0.
