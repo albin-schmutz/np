@@ -8,11 +8,38 @@ CONST
   MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
   MaxLenInt = 11;
 
+  TokDo = 1;
+  TokIf = 2;
+  TokOf = 3;
+  TokOr = 4;
+  TokEnd = 5;
+  TokVar = 6;
+  TokElse = 7;
+  TokThen = 8;
+  TokType = 9;
+  TokArray = 10;
+  TokBegin = 11;
+  TokConst = 12;
+  TokElsif = 13;
+  TokWhile = 14;
+  TokModule = 15;
+  TokRecord = 16;
+  TokProcedure = 17;
+  NbrKeywords = 18;
+
+
+TYPE
+
+  Keyword = ARRAY 12 OF CHAR;
+
 
 VAR
 
   envParam : INTEGER;
   code : ARRAY 10 OF INTEGER;
+
+  keywordLens : ARRAY 10 OF INTEGER;
+  keywords : ARRAY NbrKeywords OF Keyword;
 
 
 (* sys calls *)
@@ -87,19 +114,102 @@ PROCEDURE PrintInt(int : INTEGER);
   END PrintInt;
 
 
+PROCEDURE PrintKeyword(token : INTEGER);
+
+  VAR kwLen : INTEGER;
+
+  PROCEDURE print(VAR kw : Keyword; len : INTEGER);
+
+    VAR ix : INTEGER;
+
+    BEGIN
+      ix := 0;
+      WHILE ix < len DO
+        PrintChar(ORD(kw[ix]));
+        ix := ix + 1
+      END
+    END print;
+
+  BEGIN (* PrintKeyword *)
+    kwLen := 0;
+    WHILE keywordLens[kwLen] < token DO
+      kwLen := kwLen + 1
+    END;
+    print(keywords[token], kwLen)
+  END PrintKeyword;
+
+
+(* scanner *)
+
+
+PROCEDURE ScannerInitialize;
+
+  PROCEDURE enterKW(token : INTEGER;
+                    chars1, chars2, chars3 : INTEGER);
+
+    PROCEDURE enterChars(VAR kw : Keyword;
+                         ix : INTEGER;
+                         chars : INTEGER);
+      BEGIN
+        IF chars > 0 THEN
+          enterChars(kw, ix + 1, chars DIV 256);
+          kw[ix] := CHR(chars MOD 256)
+        END
+      END enterChars;
+
+    BEGIN (* enterKW *)
+      enterChars(keywords[token], 0, chars1);
+      enterChars(keywords[token], 4, chars2);
+      enterChars(keywords[token], 8, chars3)
+    END enterKW;
+
+  BEGIN (* ScannerInitialize *)
+    keywordLens[0] := 0;
+    keywordLens[1] := 0;
+    enterKW(TokDo, 4F44H, 0, 0);
+    enterKW(TokIf, 4649H, 0, 0);
+    enterKW(TokOf, 464FH, 0, 0);
+    enterKW(TokOr, 524FH, 0, 0);
+    keywordLens[2] := TokOr;
+    enterKW(TokEnd, 444E45H, 0, 0);
+    enterKW(TokVar, 524156H, 0, 0);
+    keywordLens[3] := TokVar;
+    enterKW(TokElse, 45534C45H, 0, 0);
+    enterKW(TokThen, 4E454854H, 0, 0);
+    enterKW(TokType, 45505954H, 0, 0);
+    keywordLens[4] := TokType;
+    enterKW(TokArray, 41525241H, 59H, 0);
+    enterKW(TokBegin, 49474542H, 4EH, 0);
+    enterKW(TokConst, 534E4F43H, 54H, 0);
+    enterKW(TokElsif, 49534C45H, 46H, 0);
+    enterKW(TokWhile, 4C494857H, 45H, 0);
+    keywordLens[5] := TokWhile;
+    enterKW(TokModule, 55444F4DH, 454CH, 0);
+    enterKW(TokRecord, 4F434552H, 4452H, 0);
+    keywordLens[6] := TokRecord;
+    keywordLens[7] := TokRecord;
+    keywordLens[8] := TokRecord;
+    enterKW(TokProcedure, 434F5250H, 52554445H, 45H);
+    keywordLens[9] := TokProcedure
+  END ScannerInitialize;
+
+
+PROCEDURE test;
+
+  VAR i : INTEGER;
+
+  BEGIN
+    i := 1;
+    WHILE i < NbrKeywords DO
+      PrintInt(i);
+      PrintChar(32);
+      PrintKeyword(i);
+      PrintChar(10);
+      i := i + 1
+    END
+  END test;
+
+
 BEGIN
-  SysCall(-2); SysCall(-3);
-  envParam := 10; SysCall(-3);
-  envParam := 65; SysCall(-3);
-  envParam := 66; SysCall(-3);
-  envParam := 67; SysCall(-3);
-  envParam := 10; SysCall(-3);
-  PrintInt(0); PrintChars(0AH);
-  PrintInt(-1); PrintChars(0AH);
-  PrintInt(MaxInt); PrintChars(0AH);
-  PrintInt(MinInt); PrintChars(0AH);
-  code[1] := 26101969H;
-  code[2] := 26111956H;
-  code[3] := -1;
-  SysCall(-4)
+  ScannerInitialize; test
 END NPC0.
