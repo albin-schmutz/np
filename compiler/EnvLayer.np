@@ -15,7 +15,12 @@ PROCEDURE GetChar*(VAR ch : INTEGER);
   VAR c : CHAR;
 
   BEGIN
-    In.Char(c); ch := ORD(c)
+    In.Char(c);
+    IF (c = 0X) OR (c = 0FFX) THEN
+      ch := -1
+    ELSE
+      ch := ORD(c)
+    END
   END GetChar;
 
 

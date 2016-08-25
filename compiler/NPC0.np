@@ -5,6 +5,7 @@ IMPORT EnvLayer;
 
 CONST
 
+  NewLine = 0AH;
   MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
   MaxLenInt = 11;
 
@@ -27,10 +28,18 @@ CONST
   TokProcedure = 17;
   NbrKeywords = 18;
 
+  ErrUnexpEof = MinInt + 1;
+
 
 TYPE
 
   Keyword = ARRAY 12 OF CHAR;
+
+  Source = RECORD
+    line : INTEGER;
+    pos : INTEGER;
+    char : INTEGER
+  END;
 
 
 VAR
@@ -40,6 +49,8 @@ VAR
 
   keywordLens : ARRAY 10 OF INTEGER;
   keywords : ARRAY NbrKeywords OF Keyword;
+
+  source : Source;
 
 
 (* sys calls *)
@@ -112,7 +123,6 @@ PROCEDURE PrintInt(int : INTEGER);
       PrintChar(ORD(tmpBuf[i]))
     END
   END PrintInt;
-
 
 PROCEDURE PrintKeyword(token : INTEGER);
 
@@ -190,26 +200,59 @@ PROCEDURE ScannerInitialize;
     keywordLens[7] := TokRecord;
     keywordLens[8] := TokRecord;
     enterKW(TokProcedure, 434F5250H, 52554445H, 45H);
-    keywordLens[9] := TokProcedure
+    keywordLens[9] := TokProcedure;
+    source.line := 0;
+    source.char := NewLine
   END ScannerInitialize;
 
 
-PROCEDURE test;
-
-  VAR i : INTEGER;
+PROCEDURE ScannerRaiseError(errorNr : INTEGER);
 
   BEGIN
-    i := 1;
-    WHILE i < NbrKeywords DO
-      PrintInt(i);
-      PrintChar(32);
-      PrintKeyword(i);
-      PrintChar(10);
-      i := i + 1
+    PrintChar(NewLine);
+    PrintChar(NewLine);
+    PrintChars(45525220H);
+    PrintInt(source.line);
+    PrintChar(2FH);
+    PrintInt(source.pos);
+    PrintChars(3A20H);
+    IF errorNr < MinInt + 256 THEN
+      PrintInt(errorNr - MinInt)
+    ELSE (* errorNr contains expected token *)
+      PrintKeyword(errorNr);
+      PrintChars(203FH)
+    END;
+    PrintChar(NewLine);
+    envParam := errorNr; SysCall(-1)
+  END ScannerRaiseError;
+
+
+PROCEDURE ScannerReadChar;
+
+  BEGIN
+    IF source.char = NewLine THEN
+      source.line := source.line + 1;
+      source.pos := 1
+    ELSE
+      source.pos := source.pos + 1
+    END;
+    SysCall(-2); source.char := envParam;
+    IF source.char = -1 THEN
+      ScannerRaiseError(ErrUnexpEof)
     END
-  END test;
+  END ScannerReadChar;
 
 
 BEGIN
-  ScannerInitialize; test
+  ScannerInitialize;
+  ScannerReadChar;
+  WHILE TRUE DO
+    PrintInt(source.line);
+    PrintChar(32);
+    PrintInt(source.pos);
+    PrintChar(32);
+    PrintInt(source.char);
+    PrintChar(NewLine);
+    ScannerReadChar
+  END
 END NPC0.
