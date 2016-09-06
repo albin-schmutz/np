@@ -8,37 +8,48 @@ CONST
   NewLine = 0AH;
   MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
   MaxLenInt = 11;
+  MaxLenIdent = 32;
 
-  TokDo = 1;
-  TokIf = 2;
-  TokOf = 3;
-  TokOr = 4;
-  TokEnd = 5;
-  TokVar = 6;
-  TokElse = 7;
-  TokThen = 8;
-  TokType = 9;
-  TokArray = 10;
-  TokBegin = 11;
-  TokConst = 12;
-  TokElsif = 13;
-  TokWhile = 14;
-  TokModule = 15;
-  TokRecord = 16;
-  TokProcedure = 17;
-  NbrKeywords = 18;
+  TokIdentifier = -1; TokInt = -2; TokChar = -3;
+
+  TokDo = 1; TokIf = 2; TokOf = 3; TokOr = 4; TokDiv = 5; TokEnd = 6;
+  TokMod = 7; TokVar = 8; TokElse = 9; TokThen = 10; TokType = 11;
+  TokArray = 12; TokBegin = 13; TokConst = 14; TokElsif = 15;
+  TokWhile = 16; TokModule = 17; TokRecord = 18; TokProcedure = 19;
+  NbrKeywords = 20;
+
+  TokAmper = 30; TokAssign = 31; TokAsterisk = 32; TokBraceL = 33;
+  TokBraceR = 34; TokBrackL = 35; TokBrackR = 36; TokColon = 37;
+  TokComma = 38; TokDot = 39; TokMinus = 40; TokParenL = 41;
+  TokParenR = 42; TokPercent = 43; TokPlus = 44; TokSemic = 45;
+  TokSlash = 46; TokTilde = 47; TokEq = 48; TokEqN = 49; TokLss = 50;
+  TokLEq = 51; TokGtr = 52; TokGEq = 53;
 
   ErrUnexpEof = MinInt + 1;
+  ErrUnexpEofInComment = MinInt + 2;
+  ErrIdentTooLong = MinInt + 3;
+  ErrIntTooLong = MinInt + 4;
+  ErrPostfixH = MinInt + 5;
+  ErrIntOverflow = MinInt + 6;
+  ErrCharOverflow = MinInt + 7;
 
 
 TYPE
 
   Keyword = ARRAY 12 OF CHAR;
 
+  Ident = RECORD
+    data : ARRAY MaxLenIdent OF CHAR;
+    len : INTEGER
+  END;
+
   Source = RECORD
     line : INTEGER;
     pos : INTEGER;
-    char : INTEGER
+    char : INTEGER;
+    token : INTEGER;
+    ident : Ident;
+    value : INTEGER
   END;
 
 
@@ -124,6 +135,7 @@ PROCEDURE PrintInt(int : INTEGER);
     END
   END PrintInt;
 
+
 PROCEDURE PrintKeyword(token : INTEGER);
 
   VAR kwLen : INTEGER;
@@ -181,7 +193,9 @@ PROCEDURE ScannerInitialize;
     enterKW(TokOf, 464FH, 0, 0);
     enterKW(TokOr, 524FH, 0, 0);
     keywordLens[2] := TokOr;
-    enterKW(TokEnd, 444E45H, 0, 0);
+    enterKW(TokDiv, 444956H, 0, 0);
+    enterKW(TokEnd, 454E45H, 0, 0);
+    enterKW(TokMod, 4D4F44H, 0, 0);
     enterKW(TokVar, 524156H, 0, 0);
     keywordLens[3] := TokVar;
     enterKW(TokElse, 45534C45H, 0, 0);
@@ -243,16 +257,217 @@ PROCEDURE ScannerReadChar;
   END ScannerReadChar;
 
 
+PROCEDURE ScannerNext;
+
+
+  PROCEDURE comment;
+
+    VAR repeat : BOOLEAN;
+
+    BEGIN
+      ScannerReadChar;
+      repeat := TRUE;
+      WHILE repeat DO
+        IF source.char = 28H (* ( *) THEN
+          ScannerReadChar;
+          IF source.char = 2AH (* * *) THEN
+            comment
+          END
+        ELSIF source.char = 2AH (* * *) THEN
+          ScannerReadChar;
+          IF source.char = 29H (* ) *) THEN
+            repeat := FALSE;
+            ScannerReadChar;
+          END
+        ELSE
+          ScannerReadChar;
+        END
+      END
+    END comment;
+
+
+  PROCEDURE identifier;
+
+    VAR repeat : BOOLEAN;
+
+    BEGIN
+      source.ident.len := 0;
+      repeat := TRUE;
+      WHILE repeat DO
+        IF source.ident.len < MaxLenIdent THEN
+          source.ident.data[source.ident.len] := CHR(source.char);
+          source.ident.len := source.ident.len + 1;
+          ScannerReadChar;
+          repeat :=
+            (source.char >= 30H) & (source.char <= 39H) OR
+            (source.char >= 41H) & (source.char <= 5AH) OR
+            (source.char >= 61H) & (source.char <= 7AH);
+        ELSE
+          ScannerRaiseError(ErrIdentTooLong)
+        END
+      END;
+      source.token := TokIdentifier
+    END identifier;
+
+
+  PROCEDURE number;
+
+    VAR
+
+      buf : ARRAY MaxLenInt OF CHAR;
+      bufIx, bufIx2 : INTEGER;
+      hex : BOOLEAN; base : INTEGER;
+      n : INTEGER; c : CHAR;
+      max, maxMod : INTEGER;
+
+    BEGIN
+      bufIx := 0;
+      hex := TRUE;
+      base := 10;
+      WHILE hex OR (source.char >= 30H) & (source.char <= 39H) DO
+        IF bufIx < MaxLenInt THEN
+          buf[bufIx] := CHR(source.char);
+          bufIx := bufIx + 1;
+          ScannerReadChar;
+          hex := (source.char >= 41H) & (source.char <= 46H);
+          IF hex THEN base := 16 END
+        ELSE
+          ScannerRaiseError(ErrIntTooLong)
+        END
+      END;
+      source.token := TokInt;
+      IF source.char = 48H THEN
+        base := 16;
+        ScannerReadChar
+      ELSIF source.char = 58H THEN
+        base := 16;
+        ScannerReadChar;
+        source.token := TokChar
+      ELSIF base = 16 THEN
+        ScannerRaiseError(ErrPostfixH)
+      END;
+      bufIx2 := 0;
+      source.value := 0;
+      max := MaxInt DIV base;
+      maxMod := MaxInt MOD base;
+      WHILE bufIx2 < bufIx DO
+        c := buf[bufIx2];
+        bufIx2 := bufIx2 + 1;
+        IF (c >= 41X) & (c <= 46X) THEN
+          n := 10 - 41H + ORD(c)
+        ELSE
+          n := - 30H + ORD(c)
+        END;
+        IF (source.value < max) OR (n <= maxMod) THEN
+          source.value := base * source.value + n
+        ELSE
+          ScannerRaiseError(ErrIntOverflow)
+        END
+      END;
+      IF (source.token = TokChar) & (source.value > 255) THEN
+        ScannerRaiseError(ErrCharOverflow)
+      END
+    END number;
+
+
+  BEGIN (* ScannerNext *)
+    source.token := 0;
+    WHILE source.token = 0 DO
+      IF source.char <= 20H THEN
+        ScannerReadChar
+      ELSIF source.char <= 41H (* A *) THEN
+        IF source.char < 30H (* 0 *) THEN
+          IF source.char = 23H (* # *) THEN
+            source.token := TokEqN; ScannerReadChar
+          ELSIF source.char = 26H (* & *) THEN
+            source.token := TokAmper; ScannerReadChar
+          ELSIF source.char = 28H (* ( *) THEN
+            source.token := TokParenL; ScannerReadChar;
+            IF source.char = 2AH (* * *) THEN
+              comment; source.token := 0
+            END
+          ELSIF source.char = 29H (* ) *) THEN
+            source.token := TokParenR; ScannerReadChar
+          ELSIF source.char = 2AH (* * *) THEN
+            source.token := TokAsterisk; ScannerReadChar
+          ELSIF source.char = 2BH (* + *) THEN
+            source.token := TokPlus; ScannerReadChar
+          ELSIF source.char = 2CH (* , *) THEN
+            source.token := TokComma; ScannerReadChar
+          ELSIF source.char = 2DH (* - *) THEN
+            source.token := TokMinus; ScannerReadChar
+          ELSIF source.char = 2EH (* . *) THEN
+            source.token := TokDot; ScannerReadChar
+          ELSIF source.char = 2FH (* / *) THEN
+            source.token := TokSlash; ScannerReadChar
+          ELSE (* ! $ % ' *)
+            ScannerReadChar
+          END
+        ELSIF source.char < 3AH (* : *) THEN
+          number
+        ELSIF source.char = 3AH (* : *) THEN
+          source.token := TokColon; ScannerReadChar;
+          IF source.char = 3DH (* = *) THEN
+            source.token := TokAssign; ScannerReadChar
+          END
+        ELSIF source.char = 3BH (* ; *) THEN
+          source.token := TokSemic; ScannerReadChar
+        ELSIF source.char = 3CH (* < *) THEN
+          source.token := TokLss; ScannerReadChar;
+          IF source.char = 3DH (* = *) THEN
+            source.token := TokLEq; ScannerReadChar
+          END
+        ELSIF source.char = 3DH (* = *) THEN
+          source.token := TokEq; ScannerReadChar
+        ELSIF source.char = 3EH (* > *) THEN
+          source.token := TokGtr; ScannerReadChar;
+          IF source.char = 3DH (* = *) THEN
+            source.token := TokGEq; ScannerReadChar
+          END
+        ELSE (* ? @ *)
+          ScannerReadChar
+        END
+      ELSIF source.char < 5BH (* [ *) THEN
+        identifier
+      ELSIF source.char < 61H (* a *) THEN
+        IF source.char = 5BH (* [ *) THEN
+          source.token := TokBrackL; ScannerReadChar
+        ELSIF source.char = 5DH (* ] *)THEN
+          source.token := TokBrackR; ScannerReadChar
+        ELSE (* ^ _ ` *)
+          ScannerReadChar
+        END
+      ELSIF source.char < 7BH (* { *) THEN
+        identifier
+      ELSE
+        IF source.char = 7BH (* { *) THEN
+          source.token := TokBraceL; ScannerReadChar
+        ELSIF source.char = 7DH (* } *) THEN
+          source.token := TokBraceR; ScannerReadChar
+        ELSIF source.char = 7EH (* ~ *) THEN
+          source.token := TokTilde; ScannerReadChar
+        ELSE (* | >7E *)
+          ScannerReadChar
+        END
+      END
+    END
+  END ScannerNext;
+
+
 BEGIN
-  ScannerInitialize;
-  ScannerReadChar;
+  ScannerInitialize; ScannerReadChar;
+  ScannerNext;
   WHILE TRUE DO
     PrintInt(source.line);
-    PrintChar(32);
+    PrintChar(2FH);
     PrintInt(source.pos);
-    PrintChar(32);
-    PrintInt(source.char);
+    PrintChar(20H);
+    PrintInt(source.token);
+    IF source.token = TokInt THEN
+      PrintChar(20H);
+      PrintInt(source.value)
+    END;
     PrintChar(NewLine);
-    ScannerReadChar
+    ScannerNext
   END
 END NPC0.
