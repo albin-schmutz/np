@@ -193,9 +193,9 @@ PROCEDURE ScannerInitialize;
     enterKW(TokOf, 464FH, 0, 0);
     enterKW(TokOr, 524FH, 0, 0);
     keywordLens[2] := TokOr;
-    enterKW(TokDiv, 444956H, 0, 0);
-    enterKW(TokEnd, 454E45H, 0, 0);
-    enterKW(TokMod, 4D4F44H, 0, 0);
+    enterKW(TokDiv, 564944H, 0, 0);
+    enterKW(TokEnd, 444E45H, 0, 0);
+    enterKW(TokMod, 444F4DH, 0, 0);
     enterKW(TokVar, 524156H, 0, 0);
     keywordLens[3] := TokVar;
     enterKW(TokElse, 45534C45H, 0, 0);
@@ -288,7 +288,7 @@ PROCEDURE ScannerNext;
 
   PROCEDURE identifier;
 
-    VAR repeat : BOOLEAN;
+    VAR repeat : BOOLEAN; i, k : INTEGER;
 
     BEGIN
       source.ident.len := 0;
@@ -306,7 +306,26 @@ PROCEDURE ScannerNext;
           ScannerRaiseError(ErrIdentTooLong)
         END
       END;
-      source.token := TokIdentifier
+      source.token := TokIdentifier;
+      IF source.ident.len <= 9 (* biggest keyword PROCEDURE *) THEN
+        k := keywordLens[source.ident.len - 1] + 1;
+        WHILE k <= keywordLens[source.ident.len] DO
+          i := 0;
+          WHILE i < source.ident.len DO
+            IF source.ident.data[i] # keywords[k][i] THEN
+              i := MaxInt
+            ELSE
+              i := i + 1
+            END
+          END;
+          IF i = source.ident.len THEN
+            source.token := k;
+            k := MaxInt
+          ELSE
+            k := k + 1
+          END
+        END
+      END
     END identifier;
 
 
@@ -375,7 +394,7 @@ PROCEDURE ScannerNext;
     WHILE source.token = 0 DO
       IF source.char <= 20H THEN
         ScannerReadChar
-      ELSIF source.char <= 41H (* A *) THEN
+      ELSIF source.char < 41H (* A *) THEN
         IF source.char < 30H (* 0 *) THEN
           IF source.char = 23H (* # *) THEN
             source.token := TokEqN; ScannerReadChar
@@ -432,7 +451,7 @@ PROCEDURE ScannerNext;
       ELSIF source.char < 61H (* a *) THEN
         IF source.char = 5BH (* [ *) THEN
           source.token := TokBrackL; ScannerReadChar
-        ELSIF source.char = 5DH (* ] *)THEN
+        ELSIF source.char = 5DH (* ] *) THEN
           source.token := TokBrackR; ScannerReadChar
         ELSE (* ^ _ ` *)
           ScannerReadChar
