@@ -33,6 +33,20 @@ CONST
   ErrIntOverflow = MinInt + 6;
   ErrCharOverflow = MinInt + 7;
 
+  ErrOutOfMemTypes = MinInt + 10;
+  ErrOutOfMemSymbols = MinInt + 11;
+
+  MaxTypes = 20;
+  MaxSymbols = 550;
+  Marker = MaxSymbols - 1;
+
+  ClassScope = 1; ClassConst = 2;
+  ClassType = 3; ClassVar = 4;
+  ClassProc = 5; ClassField = 6;
+
+  FormBool = 1; FormChar = 2; FormInt = 3;
+  FormArray = 8; FormRecord = 9;
+
 
 TYPE
 
@@ -52,6 +66,30 @@ TYPE
     value : INTEGER
   END;
 
+  Type = RECORD
+    form : INTEGER;
+    size : INTEGER;
+    len : INTEGER;
+    value : INTEGER; (* array : base type, record : scope *)
+    link: INTEGER (* - owner symbol (allocated) or
+                     - next in free list (deallocated),
+                     - -1 = NIL *)
+  END;
+
+  Symbol = RECORD
+    name : Ident;
+    level : INTEGER;
+    class : INTEGER;
+    type : INTEGER;
+    scope : INTEGER; (* parent scope *)
+    value : INTEGER; (* const or address *)
+    value2 : INTEGER; (* - deref level for VAR params or
+                         - forward address for ClassProc *)
+    next: INTEGER (* - next in scope (allocated) or
+                     - free list (deallocated),
+                     - -1 = NIL *)
+  END;
+
 
 VAR
 
@@ -62,6 +100,15 @@ VAR
   keywords : ARRAY NbrKeywords OF Keyword;
 
   source : Source;
+
+  types : ARRAY MaxTypes OF Type;
+  freeTypes : INTEGER; (* first type of free type list *)
+  symbols : ARRAY MaxSymbols OF Symbol;
+  freeSymbols : INTEGER; (* first symbol of free symbol list *)
+  allocSymbol : INTEGER; (* last allocated symbol *)
+  topScope : INTEGER; (* top symbol of scope stack *)
+  level : INTEGER; (* level of nested procedures *)
+  boolType, charType, intType : INTEGER;
 
 
 (* sys calls *)
@@ -473,20 +520,222 @@ PROCEDURE ScannerNext;
   END ScannerNext;
 
 
-BEGIN
-  ScannerInitialize; ScannerReadChar;
-  ScannerNext;
-  WHILE TRUE DO
-    PrintInt(source.line);
-    PrintChar(2FH);
-    PrintInt(source.pos);
-    PrintChar(20H);
-    PrintInt(source.token);
-    IF source.token = TokInt THEN
-      PrintChar(20H);
-      PrintInt(source.value)
+(* symbol tables *)
+
+
+PROCEDURE STableInitialize;
+
+  VAR i : INTEGER;
+
+  BEGIN
+    i := 0;
+    WHILE i < MaxTypes DO
+      types[i].form := 0;
+      types[i].size := 0;
+      types[i].len := 0;
+      types[i].value := -1;
+      types[i].link := i + 1;
+      i := i + 1
     END;
-    PrintChar(NewLine);
-    ScannerNext
-  END
+    types[i - 1].link := -1;
+    freeTypes := 0;
+    i := 0;
+    WHILE i < MaxSymbols DO
+      symbols[i].name.len := 0;
+      symbols[i].level := 0;
+      symbols[i].class := 0;
+      symbols[i].type := -1;
+      symbols[i].scope := -1;
+      symbols[i].value := 0;
+      symbols[i].value2 := 0;
+      symbols[i].next := i + 1;
+      i := i + 1
+    END;
+    symbols[Marker].next := -1;
+    freeSymbols := 0;
+    topScope := -1
+  END STableInitialize;
+
+
+PROCEDURE STableAllocType(VAR t : INTEGER; form, size, link : INTEGER);
+
+  BEGIN
+    IF freeTypes # -1 THEN
+      types[freeTypes].form := form;
+      types[freeTypes].size := size;
+      types[freeTypes].len := 0;
+      types[freeTypes].value := -1;
+      t := freeTypes;
+      PrintChars(41543A20H); PrintInt(t); PrintChar(NewLine);
+      freeTypes := types[t].link;
+      types[t].link := link
+    ELSE
+      ScannerRaiseError(ErrOutOfMemTypes)
+    END
+  END STableAllocType;
+
+
+PROCEDURE STableCompIdent(VAR eq : BOOLEAN; VAR i1, i2 : Ident);
+
+  VAR i : INTEGER;
+
+  BEGIN
+    IF i1.len # i2.len THEN
+      eq := FALSE
+    ELSE
+      i := 0; eq := TRUE;
+      WHILE i < i1.len DO
+        IF i1.data[i] = i2.data[i] THEN
+          i := i + 1
+        ELSE
+          i := i1.len;
+          eq := FALSE
+        END
+      END
+    END
+  END STableCompIdent;
+
+
+PROCEDURE STableCopyIdent(VAR trg, src : Ident);
+
+  VAR i : INTEGER;
+
+  BEGIN
+    trg.len := src.len;
+    i := 0;
+    WHILE i < src.len DO
+      trg.data[i] := src.data[i];
+      i := i + 1
+    END
+  END STableCopyIdent;
+
+
+PROCEDURE STableAllocSymbol(class : INTEGER);
+
+  BEGIN
+    IF freeSymbols # Marker THEN
+      IF class = ClassScope THEN
+        symbols[freeSymbols].name.len := 0;
+        symbols[freeSymbols].scope := topScope
+      ELSE
+        STableCopyIdent(symbols[freeSymbols].name, symbols[Marker].name);
+        symbols[freeSymbols].scope := -1
+      END;
+      symbols[freeSymbols].level := level;
+      symbols[freeSymbols].class := class;
+      symbols[freeSymbols].type := -1;
+      symbols[freeSymbols].value := 0;
+      symbols[freeSymbols].value2 := 0;
+      allocSymbol := freeSymbols;
+      PrintChars(41533A20H); PrintInt(allocSymbol); PrintChar(NewLine);
+      freeSymbols := symbols[allocSymbol].next;
+      symbols[allocSymbol].next := Marker
+    ELSE
+      ScannerRaiseError(ErrOutOfMemSymbols)
+    END
+  END STableAllocSymbol;
+
+
+PROCEDURE STableFindSymbol(VAR y : INTEGER; scope : INTEGER);
+
+  VAR eq : BOOLEAN;
+
+  BEGIN
+    y := scope;
+    STableCompIdent(eq,
+      symbols[symbols[y].next].name, symbols[Marker].name);
+    WHILE ~eq DO
+      y := symbols[y].next;
+      STableCompIdent(eq,
+        symbols[symbols[y].next].name, symbols[Marker].name)
+    END
+  END STableFindSymbol;
+
+
+PROCEDURE STableDeallocScope(scope : INTEGER);
+
+  VAR y : INTEGER;
+
+
+  PROCEDURE symbol(VAR y : INTEGER);
+
+    VAR t : INTEGER;
+
+
+    PROCEDURE type(t : INTEGER);
+
+      BEGIN
+        PrintChars(44543A20H); PrintInt(t); PrintChar(NewLine);
+        IF types[t].form = FormArray THEN
+          IF types[types[t].value].link = -1 THEN
+            type(types[t].value)
+          END;
+          types[t].link := freeTypes;
+          freeTypes := t
+        ELSIF types[t].form = FormRecord THEN
+          STableDeallocScope(types[t].value);
+          types[t].link := freeTypes;
+          freeTypes := t
+        END
+      END type;
+
+
+    BEGIN (* symbol *)
+      PrintChars(44533A20H); PrintInt(y); PrintChar(NewLine);
+      IF symbols[y].class = ClassProc THEN
+        STableDeallocScope(symbols[y].scope)
+      END;
+      t := symbols[y].type;
+      IF (t >= 0) & ((types[t].link = y) OR (types[t].link = -1)) THEN
+        type(t)
+      END
+    END symbol;
+
+
+  BEGIN (* STableDeallocScope *)
+    y := scope;
+    symbol(y);
+    WHILE symbols[y].next # Marker DO
+      y := symbols[y].next;
+      symbol(y)
+    END;
+    symbols[y].next := freeSymbols;
+    freeSymbols := scope
+  END STableDeallocScope;
+
+
+PROCEDURE tests;
+
+  VAR y : INTEGER;
+
+  BEGIN
+    STableAllocSymbol(ClassScope);
+    topScope := allocSymbol;
+    ScannerNext; (* MODULE *)
+    ScannerNext; (* NPC0 *)
+    STableCopyIdent(symbols[Marker].name, source.ident);
+    STableFindSymbol(y, topScope);
+    IF symbols[y].next = Marker THEN
+      STableAllocSymbol(ClassConst);
+      symbols[y].next := allocSymbol;
+      y := allocSymbol
+    ELSE
+      ScannerRaiseError(MinInt + 99)
+    END;
+    STableAllocSymbol(ClassType);
+    symbols[y].next := allocSymbol;
+    STableAllocType(y, FormInt, 4, allocSymbol);
+    symbols[allocSymbol].type := y;
+    STableDeallocScope(topScope);
+  END tests;
+
+
+BEGIN
+  ScannerInitialize;
+  ScannerReadChar;
+  STableInitialize;
+  STableAllocType(boolType, FormBool, 1, -1);
+  STableAllocType(charType, FormChar, 1, -1);
+  STableAllocType(intType, FormInt, 4, -1);
+  tests()
 END NPC0.
