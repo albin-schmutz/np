@@ -1,48 +1,67 @@
 MODULE NPC0;
 
-IMPORT EnvLayer;
+(*repl0*)IMPORT EnvLayer;(*repl1*)
 
 
 CONST
 
-  NewLine = 0AH;
   MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
-  MaxLenInt = 11;
-  MaxLenIdent = 32;
+  MaxLenInt = 11; MaxLenIdent = 32;
 
-  TokIdentifier = -1; TokInt = -2; TokChar = -3;
+  TokIdent = -1; TokInt = -2; TokChar = -3;
 
   TokDo = 1; TokIf = 2; TokOf = 3; TokOr = 4; TokDiv = 5; TokEnd = 6;
-  TokMod = 7; TokVar = 8; TokElse = 9; TokThen = 10; TokType = 11;
-  TokArray = 12; TokBegin = 13; TokConst = 14; TokElsif = 15;
-  TokWhile = 16; TokModule = 17; TokRecord = 18; TokProcedure = 19;
-  NbrKeywords = 20;
+  TokMod = 7; TokVar = 8; TokElse = 9; TokThen = 10; TokTrue = 11;
+  TokType = 12; TokArray = 13; TokBegin = 14; TokConst = 15; TokElsif = 16;
+  TokFalse = 17; TokWhile = 18; TokModule = 19; TokRecord = 20;
+  TokProcedure = 21; NbrKeywords = 22;
 
-  TokAmper = 30; TokAssign = 31; TokAsterisk = 32; TokBraceL = 33;
-  TokBraceR = 34; TokBrackL = 35; TokBrackR = 36; TokColon = 37;
-  TokComma = 38; TokDot = 39; TokMinus = 40; TokParenL = 41;
-  TokParenR = 42; TokPercent = 43; TokPlus = 44; TokSemic = 45;
-  TokSlash = 46; TokTilde = 47; TokEq = 48; TokEqN = 49; TokLss = 50;
-  TokLEq = 51; TokGtr = 52; TokGEq = 53;
+  TokAmper = 26H; TokAssign = 3D3AH; TokAsterisk = 2AH; TokBraceL = 7BH;
+  TokBraceR = 7DH; TokBrackL = 5BH; TokBrackR = 5DH; TokColon = 3AH;
+  TokComma = 2CH; TokDot = 2EH; TokMinus = 2DH; TokParenL = 28H;
+  TokParenR = 29H; TokPlus = 2BH; TokSemic = 3BH; TokSlash = 2FH;
+  TokTilde = 7EH; TokEq = 3DH; TokEqN = 23H; TokLss = 3CH; TokLEq = 3D3CH;
+  TokGtr = 3EH; TokGEq = 3D3EH;
 
-  ErrUnexpEof = MinInt + 1;
-  ErrUnexpEofInComment = MinInt + 2;
-  ErrIdentTooLong = MinInt + 3;
-  ErrIntTooLong = MinInt + 4;
-  ErrPostfixH = MinInt + 5;
-  ErrIntOverflow = MinInt + 6;
-  ErrCharOverflow = MinInt + 7;
+  ErrOutOfMemTypes = MinInt + 11;
+  ErrOutOfMemSymbols = MinInt + 2;
 
-  ErrOutOfMemTypes = MinInt + 10;
-  ErrOutOfMemSymbols = MinInt + 11;
+  ErrUnexpEof = MinInt + 10;
+  ErrUnexpEofInComment = MinInt + 11;
+  ErrIdentTooLong = MinInt + 12;
+  ErrIntTooLong = MinInt + 13;
+  ErrPostfixH = MinInt + 14;
+  ErrIntOverflow = MinInt + 15;
+  ErrCharOverflow = MinInt + 16;
+
+  ErrIdentExp = MinInt + 20;
+  ErrIntExp = MinInt + 21;
+  ErrCharExp = MinInt + 22;
+  ErrBoolExp = MinInt + 23;
+  ErrFactorExp = MinInt + 24;
+  ErrConstExp = MinInt + 25;
+  ErrTypeExp = MinInt + 25;
+  ErrStmtExp = MinInt + 26;
+  ErrScalarExp = MinInt + 27;
+  ErrArrayExp = MinInt + 28;
+  ErrRecordExp = MinInt + 29;
+
+  ErrMultipleDef = MinInt + 30;
+  ErrIdentUndef = MinInt + 31;
+  ErrIncompTypes = MinInt + 32;
+  ErrDivZero = MinInt + 33;
+  ErrNotLValue = MinInt + 34;
+  ErrParamsTooMany = MinInt + 35;
+  ErrParamsTooFew = MinInt + 36;
+  ErrNameMismatch = MinInt + 37;
 
   MaxTypes = 20;
   MaxSymbols = 550;
   Marker = MaxSymbols - 1;
 
-  ClassScope = 1; ClassConst = 2;
-  ClassType = 3; ClassVar = 4;
-  ClassProc = 5; ClassField = 6;
+  ClassScope = 1; ClassConst = 2; ClassType = 3;
+  ClassVar = 4; ClassProc = 5; ClassField = 6;
+  ClassFunc = 7;
 
   FormBool = 1; FormChar = 2; FormInt = 3;
   FormArray = 8; FormRecord = 9;
@@ -90,6 +109,18 @@ TYPE
                      - -1 = NIL *)
   END;
 
+  Gen = RECORD
+    mode : INTEGER;
+    type : INTEGER;
+    size : INTEGER;
+    level : INTEGER;
+    reg : INTEGER;
+    addr1 : INTEGER;
+    addr2 : INTEGER;
+    cond : INTEGER;
+    expConst : BOOLEAN
+  END;
+
 
 VAR
 
@@ -108,7 +139,8 @@ VAR
   allocSymbol : INTEGER; (* last allocated symbol *)
   topScope : INTEGER; (* top symbol of scope stack *)
   level : INTEGER; (* level of nested procedures *)
-  boolType, charType, intType : INTEGER;
+  boolType : INTEGER; charType : INTEGER; intType : INTEGER;
+  varsize : INTEGER;
 
 
 (* sys calls *)
@@ -117,6 +149,7 @@ VAR
 PROCEDURE SysCall(nr : INTEGER);
 
   BEGIN
+    (*repl0*)
     IF nr = -1 THEN
       EnvLayer.Exit(envParam)
     ELSIF nr = -2 THEN
@@ -125,7 +158,9 @@ PROCEDURE SysCall(nr : INTEGER);
       EnvLayer.PutChar(envParam)
     ELSIF nr = -4 THEN
       EnvLayer.WriteFile(code)
-    END
+    END;
+    (*repl1*)
+    nr := nr
   END SysCall;
 
 
@@ -152,9 +187,7 @@ PROCEDURE PrintChars(chars : INTEGER);
 
 PROCEDURE PrintInt(int : INTEGER);
 
-  VAR
-    i : INTEGER;
-    tmpBuf : ARRAY MaxLenInt + 1 OF CHAR;
+  VAR i : INTEGER; tmpBuf : ARRAY MaxLenInt + 1 OF CHAR;
 
   BEGIN
     i := 0;
@@ -177,8 +210,7 @@ PROCEDURE PrintInt(int : INTEGER);
       int := int DIV 10
     END;
     WHILE i > 0 DO
-      i := i - 1;
-      PrintChar(ORD(tmpBuf[i]))
+      i := i - 1; PrintChar(ORD(tmpBuf[i]))
     END
   END PrintInt;
 
@@ -187,6 +219,7 @@ PROCEDURE PrintKeyword(token : INTEGER);
 
   VAR kwLen : INTEGER;
 
+
   PROCEDURE print(VAR kw : Keyword; len : INTEGER);
 
     VAR ix : INTEGER;
@@ -194,10 +227,10 @@ PROCEDURE PrintKeyword(token : INTEGER);
     BEGIN
       ix := 0;
       WHILE ix < len DO
-        PrintChar(ORD(kw[ix]));
-        ix := ix + 1
+        PrintChar(ORD(kw[ix])); ix := ix + 1
       END
     END print;
+
 
   BEGIN (* PrintKeyword *)
     kwLen := 0;
@@ -213,8 +246,10 @@ PROCEDURE PrintKeyword(token : INTEGER);
 
 PROCEDURE ScannerInitialize;
 
-  PROCEDURE enterKW(token : INTEGER;
-                    chars1, chars2, chars3 : INTEGER);
+
+  PROCEDURE enterKW(token : INTEGER; chars1 : INTEGER;
+                    chars2 : INTEGER; chars3 : INTEGER);
+
 
     PROCEDURE enterChars(VAR kw : Keyword;
                          ix : INTEGER;
@@ -226,11 +261,13 @@ PROCEDURE ScannerInitialize;
         END
       END enterChars;
 
+
     BEGIN (* enterKW *)
       enterChars(keywords[token], 0, chars1);
       enterChars(keywords[token], 4, chars2);
       enterChars(keywords[token], 8, chars3)
     END enterKW;
+
 
   BEGIN (* ScannerInitialize *)
     keywordLens[0] := 0;
@@ -247,12 +284,14 @@ PROCEDURE ScannerInitialize;
     keywordLens[3] := TokVar;
     enterKW(TokElse, 45534C45H, 0, 0);
     enterKW(TokThen, 4E454854H, 0, 0);
+    enterKW(TokTrue, 45555254H, 0, 0);
     enterKW(TokType, 45505954H, 0, 0);
     keywordLens[4] := TokType;
     enterKW(TokArray, 41525241H, 59H, 0);
     enterKW(TokBegin, 49474542H, 4EH, 0);
     enterKW(TokConst, 534E4F43H, 54H, 0);
     enterKW(TokElsif, 49534C45H, 46H, 0);
+    enterKW(TokFalse, 534C4146H, 45H, 0);
     enterKW(TokWhile, 4C494857H, 45H, 0);
     keywordLens[5] := TokWhile;
     enterKW(TokModule, 55444F4DH, 454CH, 0);
@@ -263,15 +302,14 @@ PROCEDURE ScannerInitialize;
     enterKW(TokProcedure, 434F5250H, 52554445H, 45H);
     keywordLens[9] := TokProcedure;
     source.line := 0;
-    source.char := NewLine
+    source.char := 0AH
   END ScannerInitialize;
 
 
 PROCEDURE ScannerRaiseError(errorNr : INTEGER);
 
   BEGIN
-    PrintChar(NewLine);
-    PrintChar(NewLine);
+    PrintChars(0A0AH);
     PrintChars(45525220H);
     PrintInt(source.line);
     PrintChar(2FH);
@@ -279,11 +317,14 @@ PROCEDURE ScannerRaiseError(errorNr : INTEGER);
     PrintChars(3A20H);
     IF errorNr < MinInt + 256 THEN
       PrintInt(errorNr - MinInt)
-    ELSE (* errorNr contains expected token *)
+    ELSIF errorNr < NbrKeywords THEN
       PrintKeyword(errorNr);
       PrintChars(203FH)
+    ELSE
+      PrintChars(errorNr);
+      PrintChars(203FH)
     END;
-    PrintChar(NewLine);
+    PrintChar(0AH);
     envParam := errorNr; SysCall(-1)
   END ScannerRaiseError;
 
@@ -291,7 +332,7 @@ PROCEDURE ScannerRaiseError(errorNr : INTEGER);
 PROCEDURE ScannerReadChar;
 
   BEGIN
-    IF source.char = NewLine THEN
+    IF source.char = 0AH THEN
       source.line := source.line + 1;
       source.pos := 1
     ELSE
@@ -324,10 +365,10 @@ PROCEDURE ScannerNext;
           ScannerReadChar;
           IF source.char = 29H (* ) *) THEN
             repeat := FALSE;
-            ScannerReadChar;
+            ScannerReadChar
           END
         ELSE
-          ScannerReadChar;
+          ScannerReadChar
         END
       END
     END comment;
@@ -335,7 +376,7 @@ PROCEDURE ScannerNext;
 
   PROCEDURE identifier;
 
-    VAR repeat : BOOLEAN; i, k : INTEGER;
+    VAR repeat : BOOLEAN; i : INTEGER; k : INTEGER;
 
     BEGIN
       source.ident.len := 0;
@@ -348,12 +389,12 @@ PROCEDURE ScannerNext;
           repeat :=
             (source.char >= 30H) & (source.char <= 39H) OR
             (source.char >= 41H) & (source.char <= 5AH) OR
-            (source.char >= 61H) & (source.char <= 7AH);
+            (source.char >= 61H) & (source.char <= 7AH)
         ELSE
           ScannerRaiseError(ErrIdentTooLong)
         END
       END;
-      source.token := TokIdentifier;
+      source.token := TokIdent;
       IF source.ident.len <= 9 (* biggest keyword PROCEDURE *) THEN
         k := keywordLens[source.ident.len - 1] + 1;
         WHILE k <= keywordLens[source.ident.len] DO
@@ -381,10 +422,10 @@ PROCEDURE ScannerNext;
     VAR
 
       buf : ARRAY MaxLenInt OF CHAR;
-      bufIx, bufIx2 : INTEGER;
+      bufIx : INTEGER; bufIx2 : INTEGER;
       hex : BOOLEAN; base : INTEGER;
       n : INTEGER; c : CHAR;
-      max, maxMod : INTEGER;
+      max  : INTEGER; maxMod : INTEGER;
 
     BEGIN
       bufIx := 0;
@@ -557,7 +598,8 @@ PROCEDURE STableInitialize;
   END STableInitialize;
 
 
-PROCEDURE STableAllocType(VAR t : INTEGER; form, size, link : INTEGER);
+PROCEDURE STableAllocType(VAR t : INTEGER; form : INTEGER;
+                          size: INTEGER; link : INTEGER);
 
   BEGIN
     IF freeTypes # -1 THEN
@@ -566,7 +608,8 @@ PROCEDURE STableAllocType(VAR t : INTEGER; form, size, link : INTEGER);
       types[freeTypes].len := 0;
       types[freeTypes].value := -1;
       t := freeTypes;
-      PrintChars(41543A20H); PrintInt(t); PrintChar(NewLine);
+      (*LOG*)
+      PrintChars(59415420H); PrintInt(t); PrintChar(9);
       freeTypes := types[t].link;
       types[t].link := link
     ELSE
@@ -575,7 +618,8 @@ PROCEDURE STableAllocType(VAR t : INTEGER; form, size, link : INTEGER);
   END STableAllocType;
 
 
-PROCEDURE STableCompIdent(VAR eq : BOOLEAN; VAR i1, i2 : Ident);
+PROCEDURE STableCompIdent(VAR eq : BOOLEAN;
+                          VAR i1 : Ident; VAR i2 : Ident);
 
   VAR i : INTEGER;
 
@@ -596,7 +640,7 @@ PROCEDURE STableCompIdent(VAR eq : BOOLEAN; VAR i1, i2 : Ident);
   END STableCompIdent;
 
 
-PROCEDURE STableCopyIdent(VAR trg, src : Ident);
+PROCEDURE STableCopyIdent(VAR trg : Ident; VAR src : Ident);
 
   VAR i : INTEGER;
 
@@ -627,7 +671,8 @@ PROCEDURE STableAllocSymbol(class : INTEGER);
       symbols[freeSymbols].value := 0;
       symbols[freeSymbols].value2 := 0;
       allocSymbol := freeSymbols;
-      PrintChars(41533A20H); PrintInt(allocSymbol); PrintChar(NewLine);
+      (*LOG*)
+      PrintChars(59415320H); PrintInt(allocSymbol); PrintChar(9);
       freeSymbols := symbols[allocSymbol].next;
       symbols[allocSymbol].next := Marker
     ELSE
@@ -661,27 +706,30 @@ PROCEDURE STableDeallocScope(scope : INTEGER);
 
     VAR t : INTEGER;
 
-
     PROCEDURE type(t : INTEGER);
 
       BEGIN
-        PrintChars(44543A20H); PrintInt(t); PrintChar(NewLine);
         IF types[t].form = FormArray THEN
           IF types[types[t].value].link = -1 THEN
             type(types[t].value)
           END;
           types[t].link := freeTypes;
+          (*LOG*)
+          PrintChars(59445420H); PrintInt(t); PrintChar(9);
           freeTypes := t
         ELSIF types[t].form = FormRecord THEN
           STableDeallocScope(types[t].value);
           types[t].link := freeTypes;
+          (*LOG*)
+          PrintChars(59445420H); PrintInt(t); PrintChar(9);
           freeTypes := t
         END
       END type;
 
 
     BEGIN (* symbol *)
-      PrintChars(44533A20H); PrintInt(y); PrintChar(NewLine);
+      (*LOG*)
+      PrintChars(59445320H); PrintInt(y); PrintChar(9);
       IF symbols[y].class = ClassProc THEN
         STableDeallocScope(symbols[y].scope)
       END;
@@ -704,38 +752,900 @@ PROCEDURE STableDeallocScope(scope : INTEGER);
   END STableDeallocScope;
 
 
-PROCEDURE tests;
+PROCEDURE STableInitUniverse;
 
   VAR y : INTEGER;
 
+
+  PROCEDURE enter(VAR y : INTEGER; len : INTEGER;
+                  chars1 : INTEGER; chars2 : INTEGER;
+                  class : INTEGER; value : INTEGER; type : INTEGER);
+
+
+    PROCEDURE enterChars(ix : INTEGER; chars : INTEGER);
+
+      BEGIN
+        IF chars > 0 THEN
+          enterChars(ix + 1, chars DIV 256);
+          symbols[Marker].name.data[ix] := CHR(chars MOD 256)
+        END
+      END enterChars;
+
+
+    BEGIN (* enter *)
+      enterChars(0, chars1); enterChars(4, chars2);
+      symbols[Marker].name.len := len;
+      STableAllocSymbol(class);
+      symbols[y].next := allocSymbol;
+      y := allocSymbol;
+      symbols[y].value := value;
+      symbols[y].type := type
+    END enter;
+
+
+  BEGIN (* STableInitUniverse *)
+    STableAllocType(boolType, FormBool, 1, -1);
+    STableAllocType(charType, FormChar, 1, -1);
+    STableAllocType(intType, FormInt, 4, -1);
+    y := topScope;
+    enter(y, 7, 4C4F4F42H, 4E4145H, ClassType, 0, boolType); (* BOOLEAN*)
+    enter(y, 4, 52414843H, 0, ClassType, 0, charType); (* CHAR *)
+    enter(y, 7, 45544E49H, 524547H, ClassType, 0, intType); (* INTEGER *)
+    enter(y, 3, 524843H, 0, ClassFunc, 1, charType); (* CHR *)
+    enter(y, 3, 44524FH, 0, ClassFunc, 2, intType)  (* ORD *)
+  END STableInitUniverse;
+
+
+(* Generator *)
+
+
+PROCEDURE GenAlign(VAR size : INTEGER);
+
+  VAR i : INTEGER; j : INTEGER;
+
   BEGIN
+    IF size < 0 THEN i := -4 ELSE i := 4 END;
+    j := size MOD i;
+    IF j # 0 THEN
+      size := size + (i - j)
+    END
+  END GenAlign;
+
+
+(* parser *)
+
+
+PROCEDURE parse;
+
+
+  PROCEDURE accept(token : INTEGER);
+
+    BEGIN
+      IF source.token # token THEN
+        IF token = TokIdent THEN
+          ScannerRaiseError(ErrIdentExp)
+        ELSIF token = TokInt THEN
+          ScannerRaiseError(ErrIntExp)
+        ELSIF token = TokChar THEN
+          ScannerRaiseError(ErrCharExp)
+        ELSE
+          ScannerRaiseError(token)
+        END
+      END
+    END accept;
+
+
+  PROCEDURE checkBool(VAR g : Gen);
+
+    BEGIN
+      IF types[g.type].form # FormBool THEN
+        ScannerRaiseError(ErrBoolExp)
+      END
+    END checkBool;
+
+
+  PROCEDURE checkChar(VAR g : Gen);
+
+    BEGIN
+      IF types[g.type].form # FormChar THEN
+        ScannerRaiseError(ErrCharExp)
+      END
+    END checkChar;
+
+
+  PROCEDURE checkInt(VAR g : Gen);
+
+    BEGIN
+      IF types[g.type].form # FormInt THEN
+        ScannerRaiseError(ErrIntExp)
+      END
+    END checkInt;
+
+
+  PROCEDURE identDef(VAR y : INTEGER; class : INTEGER);
+
+    BEGIN
+      accept(TokIdent);
+      STableCopyIdent(symbols[Marker].name, source.ident);
+      STableFindSymbol(y, topScope);
+      IF symbols[y].next = Marker THEN
+        STableAllocSymbol(class);
+        symbols[y].next := allocSymbol;
+        y := allocSymbol;
+        ScannerNext
+      ELSE
+        ScannerRaiseError(ErrMultipleDef)
+      END
+    END identDef;
+
+
+  PROCEDURE identUse(VAR y : INTEGER);
+
+    VAR scope : INTEGER;
+
+
+    PROCEDURE checkLevel(VAR y : Symbol);
+
+      BEGIN
+        IF (y.level # 0) &
+           (y.level # level) &
+           (y.class = ClassVar) THEN
+          ScannerRaiseError(ErrIdentUndef)
+        END
+      END checkLevel;
+
+
+    BEGIN (* identUse *)
+      STableCopyIdent(symbols[Marker].name, source.ident);
+      scope := topScope;
+      WHILE scope # -1 DO
+        STableFindSymbol(y, scope);
+        IF symbols[y].next # Marker THEN
+          scope := -1
+        ELSE
+          scope := symbols[scope].scope
+        END
+      END;
+      IF symbols[y].next # Marker THEN
+        y := symbols[y].next;
+        checkLevel(symbols[y])
+      ELSE
+        ScannerRaiseError(ErrIdentUndef)
+      END
+    END identUse;
+
+
+  PROCEDURE expr(VAR g : Gen);
+
+    VAR op : INTEGER; g2 : Gen;
+
+
+    PROCEDURE Op1(VAR g : Gen; op : INTEGER);
+
+      BEGIN
+        IF op = TokMinus THEN
+          IF g.mode = ClassConst THEN
+            IF g.addr1 # MinInt THEN
+              g.addr1 := -g.addr1
+            ELSE
+              ScannerRaiseError(ErrIntOverflow)
+            END
+          END
+        END
+      END Op1;
+
+
+    PROCEDURE Op2(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+
+      PROCEDURE mul(VAR g : Gen; VAR g2 : Gen);
+
+        VAR isNeg : BOOLEAN; i : INTEGER;
+
+        BEGIN
+          IF (g.addr1 = 0) OR (g2.addr1 = 0) THEN
+            g.addr1 := 0
+          ELSE
+            IF (g.addr1 > 0) & (g2.addr1 < 0) OR
+               (g.addr1 < 0) & (g2.addr1 > 0) THEN
+              isNeg := TRUE;
+              i := MinInt
+            ELSE
+              isNeg := FALSE;
+              i := MaxInt
+            END;
+            i := i DIV g2.addr1;
+            IF (g.addr1 < 0) & (i > g.addr1) OR
+               (g.addr1 > 0) & (i < g.addr1) THEN
+              ScannerRaiseError(ErrIntOverflow)
+            ELSE
+              g.addr1 := g.addr1 * g2.addr1
+            END
+          END
+        END mul;
+
+
+      PROCEDURE div(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF g2.addr1 = 0 THEN
+            ScannerRaiseError(ErrDivZero)
+          ELSE
+            g.addr1 := g.addr1 DIV g2.addr1
+          END
+        END div;
+
+
+      PROCEDURE mod(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF g2.addr1 = 0 THEN
+            ScannerRaiseError(ErrDivZero)
+          ELSE
+            g.addr1 := g.addr1 MOD g2.addr1
+          END
+        END mod;
+
+
+      PROCEDURE add(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF MaxInt - g2.addr1 < g.addr1 THEN
+            ScannerRaiseError(ErrIntOverflow)
+          ELSE
+            g.addr1 := g.addr1 + g2.addr1
+          END
+        END add;
+
+
+      PROCEDURE sub(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF MinInt + g2.addr1 > g.addr1 THEN
+            ScannerRaiseError(ErrIntOverflow)
+          ELSE
+            g.addr1 := g.addr1 - g2.addr1
+          END
+        END sub;
+
+
+      BEGIN (* Op2 *)
+        IF types[g.type].form = FormInt THEN
+          IF (g.mode = ClassConst) & (g2.mode = ClassConst) THEN
+            IF op = TokAsterisk THEN
+              mul(g, g2)
+            ELSIF op = TokDiv THEN
+              div(g, g2)
+            ELSIF op = TokMod THEN
+              mod(g, g2)
+            ELSIF op = TokPlus THEN
+              add(g, g2)
+            ELSIF op = TokMinus THEN
+              sub(g, g2)
+            ELSE
+              ScannerRaiseError(MinInt + 102)
+            END
+          END
+        END
+      END Op2;
+
+
+    PROCEDURE simpleExpr(VAR g : Gen);
+
+      VAR op : INTEGER; g2 : Gen;
+
+
+      PROCEDURE term(VAR g : Gen);
+
+        VAR op : INTEGER; g2 : Gen;
+
+
+        PROCEDURE factor(VAR g : Gen);
+
+          VAR y : INTEGER;
+
+
+          PROCEDURE selector(VAR g : Gen);
+
+            VAR g2 : Gen; y : INTEGER;
+
+            BEGIN
+              WHILE (source.token = TokBrackL) OR
+                    (source.token = TokDot) DO
+                IF source.token = TokBrackL THEN
+                  IF types[g.type].form = FormArray THEN
+                    ScannerNext;
+                    g2.expConst := FALSE;
+                    expr(g2);
+                    checkInt(g2);
+                    accept(TokBrackR);
+                    g.type := types[g.type].value;
+                    g.size := types[g.type].size
+                  ELSE
+                    ScannerRaiseError(ErrArrayExp)
+                  END
+                ELSE
+                  IF types[g.type].form = FormRecord THEN
+                    ScannerNext;
+                    accept(TokIdent);
+                    STableCopyIdent(symbols[Marker].name, source.ident);
+                    STableFindSymbol(y, types[g.type].value);
+                    y := symbols[y].next;
+                    IF y > 0 THEN
+                      g.type := symbols[y].type;
+                      g.size := types[symbols[y].type].size
+                    ELSE
+                      ScannerRaiseError(ErrIdentUndef)
+                    END
+                  ELSE
+                    ScannerRaiseError(ErrRecordExp)
+                  END
+                END;
+                ScannerNext
+              END
+            END selector;
+
+
+          PROCEDURE stdFunc(VAR g : Gen; VAR y : Symbol);
+
+            BEGIN
+              ScannerNext;
+              accept(TokParenL);
+              ScannerNext;
+              g.expConst := FALSE;
+              expr(g);
+              IF y.value = 1 (* CHR *) THEN
+                checkInt(g);
+                g.type := charType
+              ELSIF y.value = 2 (* ORD *) THEN
+                checkChar(g);
+                g.type := intType
+              END;
+              accept(TokParenR);
+              ScannerNext
+            END stdFunc;
+
+
+          BEGIN (* factor *)
+            IF source.token = TokChar THEN
+              g.mode := ClassConst;
+              g.type := charType;
+              g.addr1 := source.value;
+              ScannerNext
+            ELSIF source.token = TokInt THEN
+              g.mode := ClassConst;
+              g.type := intType;
+              g.addr1 := source.value;
+              ScannerNext
+            ELSIF source.token = TokFalse THEN
+              g.mode := ClassConst;
+              g.type := boolType;
+              g.addr1 := 0;
+              ScannerNext
+            ELSIF source.token = TokTrue THEN
+              g.mode := ClassConst;
+              g.type := boolType;
+              g.addr1 := 1;
+              ScannerNext
+            ELSIF source.token = TokIdent THEN
+              identUse(y);
+              IF symbols[y].class = ClassFunc THEN
+                stdFunc(g, symbols[y])
+              ELSE
+                g.mode := symbols[y].class;
+                g.type := symbols[y].type;
+                g.addr1 := symbols[y].value;
+                ScannerNext;
+                selector(g)
+              END
+            ELSIF source.token = TokParenL THEN
+              ScannerNext;
+              expr(g);
+              accept(TokParenR);
+              ScannerNext
+            ELSIF source.token = TokTilde THEN
+              ScannerNext;
+              factor(g)
+            ELSE
+              ScannerRaiseError(ErrFactorExp)
+            END
+          END factor;
+
+
+        BEGIN (* term *)
+          factor(g);
+          WHILE (source.token = TokAsterisk) OR
+                (source.token = TokDiv) OR
+                (source.token = TokMod) OR
+                (source.token = TokAmper) DO
+            op := source.token;
+            IF op # TokAmper THEN
+              checkInt(g)
+            ELSE
+              checkBool(g)
+            END;
+            ScannerNext;
+            g2.expConst := FALSE;
+            factor(g2);
+            IF g.type = g2.type THEN
+              Op2(g, g2, op)
+            ELSE
+              ScannerRaiseError(ErrIncompTypes)
+            END
+          END
+        END term;
+
+
+      BEGIN (* simpleExpr *)
+        IF source.token = TokPlus THEN
+          ScannerNext;
+          term(g);
+          checkInt(g)
+        ELSIF source.token = TokMinus THEN
+          ScannerNext;
+          term(g);
+          checkInt(g);
+          Op1(g, TokMinus)
+        ELSE
+          term(g)
+        END;
+        WHILE (source.token = TokPlus) OR
+              (source.token = TokMinus) OR
+              (source.token = TokOr) DO
+          op := source.token;
+          IF op # TokOr THEN
+            checkInt(g)
+          ELSE
+            checkBool(g)
+          END;
+          ScannerNext;
+          g2.expConst := FALSE;
+          term(g2);
+          IF g.type = g2.type THEN
+            Op2(g, g2, op)
+          ELSE
+            ScannerRaiseError(ErrIncompTypes)
+          END
+        END
+      END simpleExpr;
+
+
+    BEGIN (* expr *)
+      simpleExpr(g);
+      IF (source.token = TokEq) OR (source.token = TokEqN) OR
+         (source.token = TokLss) OR (source.token = TokLEq) OR
+         (source.token = TokGtr) OR (source.token = TokGEq) THEN
+        IF ~g.expConst THEN
+          op := source.token;
+          ScannerNext;
+          g2.expConst := FALSE;
+          simpleExpr(g2);
+          IF g.type = g2.type THEN
+            g.type := boolType;
+            g.size := types[boolType].size
+          ELSE
+            ScannerRaiseError(ErrIncompTypes)
+          END
+        ELSE
+          ScannerRaiseError(ErrConstExp)
+        END
+      END
+    END expr;
+
+
+  PROCEDURE constExpr(VAR i : INTEGER);
+
+    VAR g : Gen;
+
+    BEGIN
+      g.expConst := TRUE;
+      expr(g);
+      i := g.addr1
+    END constExpr;
+
+
+  PROCEDURE typeDef(VAR y : INTEGER; VAR t : INTEGER; class : INTEGER);
+
+    VAR link : INTEGER; y2 : INTEGER;
+
+
+    PROCEDURE array(VAR t : INTEGER; link : INTEGER);
+
+      VAR y : INTEGER;
+
+      BEGIN
+        ScannerNext;
+        STableAllocType(t, FormArray, 0, link);
+        constExpr(types[t].len);
+        accept(TokOf);
+        ScannerNext;
+        typeDef(y, types[t].value, 0);
+        types[t].size := types[t].len * types[types[t].value].size
+      END array;
+
+
+    PROCEDURE record(VAR t : INTEGER; link : INTEGER);
+
+      VAR addr : INTEGER;
+
+
+      PROCEDURE field(VAR t : INTEGER; VAR addr : INTEGER);
+
+        VAR y : INTEGER;
+
+        BEGIN
+          typeDef(y, t, ClassField);
+          symbols[y].value := addr;
+          addr := addr + types[t].size;
+          GenAlign(addr)
+        END field;
+
+
+      BEGIN (* record *)
+        addr := 0;
+        STableAllocSymbol(ClassScope);
+        topScope := allocSymbol;
+        ScannerNext;
+        field(t, addr);
+        WHILE source.token = TokSemic DO
+          ScannerNext; field(t, addr)
+        END;
+        accept(TokEnd);
+        STableAllocType(t, FormRecord, 0, link);
+        types[t].size := addr;
+        types[t].value := topScope;
+        topScope := symbols[topScope].scope;
+        ScannerNext
+      END record;
+
+
+    BEGIN (* typeDef *)
+      link := -1;
+      IF class # 0 THEN
+        identDef(y, class);
+        IF class = ClassType THEN
+          link := y;
+          accept(TokEq)
+        ELSE
+          accept(TokColon)
+        END;
+        ScannerNext
+      END;
+      IF source.token = TokIdent THEN
+        identUse(y2);
+        IF (class # 0) & (y = y2) THEN
+          ScannerRaiseError(ErrIdentUndef)
+        END;
+        t := symbols[y2].type;
+        ScannerNext
+      ELSIF source.token = TokArray THEN
+        array(t, link)
+      ELSIF source.token = TokRecord THEN
+        record(t, link)
+      ELSE
+        ScannerRaiseError(ErrTypeExp)
+      END;
+      IF class # 0 THEN
+        symbols[y].type := t
+      END
+    END typeDef;
+
+
+  PROCEDURE stmts;
+
+
+    PROCEDURE stmt;
+
+      VAR y : INTEGER;
+
+
+      PROCEDURE assign;
+
+        VAR g : Gen; g2 : Gen;
+
+        BEGIN
+          g.expConst := FALSE;
+          expr(g);
+          IF g.mode = ClassVar THEN
+            accept(TokAssign);
+            ScannerNext;
+            g2.expConst := FALSE;
+            expr(g2);
+            IF g.type = g2.type THEN
+              g.type := g2.type
+            ELSE
+              ScannerRaiseError(ErrIncompTypes)
+            END
+          ELSE
+            ScannerRaiseError(ErrNotLValue)
+          END
+        END assign;
+
+
+      PROCEDURE call(VAR proc : Symbol);
+
+        VAR y : INTEGER;
+
+
+        PROCEDURE param(VAR y : INTEGER);
+
+          VAR g : Gen;
+
+          BEGIN
+            g.expConst := FALSE;
+            expr(g);
+            IF (y # Marker) & (symbols[y].value > 0) THEN
+              IF symbols[y].type = g.type THEN
+                symbols[y].type := g.type
+              ELSE
+                ScannerRaiseError(ErrIncompTypes)
+              END
+            ELSE
+              ScannerRaiseError(ErrParamsTooMany)
+            END;
+            y := symbols[y].next
+          END param;
+
+
+        BEGIN (* call *)
+          y := symbols[proc.scope].next;
+          ScannerNext;
+          IF source.token = TokParenL THEN
+            ScannerNext;
+            param(y);
+            WHILE source.token = TokComma DO
+              ScannerNext; param(y)
+            END;
+            accept(TokParenR);
+            ScannerNext
+          END;
+          IF (y = Marker) OR (symbols[y].value < 0) THEN
+            y := y
+          ELSE
+            ScannerRaiseError(ErrParamsTooFew)
+          END
+        END call;
+
+
+      PROCEDURE if;
+
+        VAR g : Gen;
+
+        BEGIN
+          ScannerNext;
+          g.expConst := FALSE;
+          expr(g);
+          checkBool(g);
+          accept(TokThen);
+          ScannerNext;
+          stmts;
+          WHILE source.token = TokElsif DO
+            ScannerNext;
+            expr(g);
+            checkBool(g);
+            accept(TokThen);
+            ScannerNext;
+            stmts
+          END;
+          IF source.token = TokElse THEN
+            ScannerNext;
+            stmts
+          END;
+          accept(TokEnd);
+          ScannerNext
+        END if;
+
+
+      PROCEDURE while;
+
+        VAR g : Gen;
+
+        BEGIN
+          ScannerNext;
+          g.expConst := FALSE;
+          expr(g);
+          checkBool(g);
+          accept(TokDo);
+          ScannerNext;
+          stmts;
+          accept(TokEnd);
+          ScannerNext
+        END while;
+
+
+      BEGIN (* stmt *)
+        IF source.token = TokIdent THEN
+          identUse(y);
+          IF symbols[y].class = ClassProc THEN
+            call(symbols[y])
+          ELSE
+            assign
+          END
+        ELSIF source.token = TokIf THEN
+          if
+        ELSIF source.token = TokWhile THEN
+          while
+        ELSE
+          ScannerRaiseError(ErrStmtExp)
+        END
+      END stmt;
+
+
+    BEGIN (* stmts *)
+      stmt;
+      WHILE source.token = TokSemic DO
+        ScannerNext; stmt
+      END
+    END stmts;
+
+
+  PROCEDURE decls(VAR addr : INTEGER);
+
+
+    PROCEDURE const;
+
+      VAR y : INTEGER;
+
+      BEGIN
+        WHILE source.token = TokIdent DO
+          identDef(y, ClassConst);
+          accept(TokEq);
+          ScannerNext;
+          constExpr(symbols[y].value);
+          (*LOG*)
+          PrintChars(50303020H); PrintInt(symbols[y].value); PrintChar(9);
+          symbols[y].type := intType;
+          accept(TokSemic);
+          ScannerNext
+        END
+      END const;
+
+
+    PROCEDURE type;
+
+      VAR y : INTEGER; t : INTEGER;
+
+      BEGIN
+        WHILE source.token = TokIdent DO
+          typeDef(y, t, ClassType);
+          accept(TokSemic);
+          ScannerNext
+        END
+      END type;
+
+
+    PROCEDURE var(VAR addr : INTEGER);
+
+      VAR y : INTEGER; t : INTEGER; size : INTEGER;
+
+      BEGIN
+        WHILE source.token = TokIdent DO
+          typeDef(y, t, ClassVar);
+          size := types[t].size;
+          GenAlign(size);
+          addr := addr - size;
+          symbols[y].value := addr;
+          accept(TokSemic);
+          ScannerNext
+        END
+      END var;
+
+
+    PROCEDURE proc;
+
+      VAR
+
+        y : INTEGER; parsize : INTEGER; varsize : INTEGER;
+        lastParam : INTEGER; eq : BOOLEAN;
+
+
+      PROCEDURE params(VAR addr : INTEGER);
+
+        VAR y : INTEGER; t : INTEGER; offs : INTEGER;
+
+        BEGIN
+          IF source.token = TokVar THEN
+            ScannerNext;
+            typeDef(y, t, ClassVar);
+            symbols[y].value2 := 1
+          ELSE
+            typeDef(y, t, ClassVar);
+            symbols[y].value2 := 0
+          END;
+          IF symbols[y].value2 = 0 THEN
+            IF types[t].form >= FormArray THEN
+              ScannerRaiseError(ErrScalarExp)
+            END
+          END;
+          addr := addr + 4; offs := addr;
+          IF source.token = TokSemic THEN
+            ScannerNext;
+            params(addr)
+          END;
+          symbols[y].value := addr - offs + 8
+        END params;
+
+
+      BEGIN (* proc *)
+        identDef(y, ClassProc);
+        symbols[y].value := MinInt (* forward call marker *);
+        symbols[y].value2 := 0;
+        level := level + 1;
+        STableAllocSymbol(ClassScope);
+        topScope := allocSymbol;
+        symbols[y].scope := allocSymbol;
+        parsize := 0;
+        IF source.token = TokParenL THEN
+          ScannerNext;
+          IF source.token # TokParenR THEN
+            params(parsize);
+            accept(TokParenR);
+            ScannerNext
+          END
+        END;
+        accept(TokSemic);
+        ScannerNext;
+        lastParam := allocSymbol;
+        varsize := 0;
+        decls(varsize);
+        accept(TokBegin);
+        ScannerNext;
+        stmts;
+        accept(TokEnd);
+        ScannerNext;
+        accept(TokIdent);
+        STableCompIdent(eq, symbols[y].name, source.ident);
+        IF eq THEN
+          ScannerNext;
+          accept(TokSemic);
+          ScannerNext
+        ELSE
+          ScannerRaiseError(ErrNameMismatch)
+        END;
+        IF symbols[lastParam].next # Marker THEN
+          STableDeallocScope(symbols[lastParam].next);
+          symbols[lastParam].next := Marker
+        END;
+        topScope := symbols[topScope].scope;
+        level := level - 1
+      END proc;
+
+
+    BEGIN (* decls *)
+      IF source.token = TokConst THEN
+        ScannerNext; const
+      END;
+      IF source.token = TokType THEN
+        ScannerNext; type
+      END;
+      IF source.token = TokVar THEN
+        ScannerNext; var(addr)
+      END;
+      WHILE source.token = TokProcedure DO
+        ScannerNext; proc
+      END
+    END decls;
+
+
+  BEGIN (* parse *)
+    ScannerNext; accept(TokModule);
+    ScannerNext; accept(TokIdent);
+    ScannerNext; accept(TokSemic);
+    ScannerNext;
     STableAllocSymbol(ClassScope);
     topScope := allocSymbol;
-    ScannerNext; (* MODULE *)
-    ScannerNext; (* NPC0 *)
-    STableCopyIdent(symbols[Marker].name, source.ident);
-    STableFindSymbol(y, topScope);
-    IF symbols[y].next = Marker THEN
-      STableAllocSymbol(ClassConst);
-      symbols[y].next := allocSymbol;
-      y := allocSymbol
-    ELSE
-      ScannerRaiseError(MinInt + 99)
-    END;
-    STableAllocSymbol(ClassType);
-    symbols[y].next := allocSymbol;
-    STableAllocType(y, FormInt, 4, allocSymbol);
-    symbols[allocSymbol].type := y;
+    varsize := 0;
+    decls(varsize);
     STableDeallocScope(topScope);
-  END tests;
+    topScope := symbols[topScope].scope
+  END parse;
 
 
 BEGIN
-  ScannerInitialize;
-  ScannerReadChar;
-  STableInitialize;
-  STableAllocType(boolType, FormBool, 1, -1);
-  STableAllocType(charType, FormChar, 1, -1);
-  STableAllocType(intType, FormInt, 4, -1);
-  tests()
+  ScannerInitialize; ScannerReadChar; STableInitialize;
+  STableAllocSymbol(ClassScope); topScope := allocSymbol;
+  STableInitUniverse();
+  level := 0;
+  parse();
+  STableDeallocScope(topScope); (* universe *)
 END NPC0.
