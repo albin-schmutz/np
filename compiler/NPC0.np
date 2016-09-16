@@ -796,7 +796,7 @@ PROCEDURE STableInitUniverse;
   END STableInitUniverse;
 
 
-(* Generator *)
+(* generator *)
 
 
 PROCEDURE GenAlign(VAR size : INTEGER);
@@ -1636,16 +1636,22 @@ PROCEDURE parse;
     topScope := allocSymbol;
     varsize := 0;
     decls(varsize);
+    IF source.token = TokBegin THEN
+      ScannerNext; stmts
+    END;
     STableDeallocScope(topScope);
-    topScope := symbols[topScope].scope
+    topScope := symbols[topScope].scope;
+    accept(TokEnd);
+    ScannerNext; accept(TokIdent);
+    ScannerNext; accept(TokDot)
   END parse;
 
 
 BEGIN
   ScannerInitialize; ScannerReadChar; STableInitialize;
   STableAllocSymbol(ClassScope); topScope := allocSymbol;
-  STableInitUniverse();
+  STableInitUniverse;
   level := 0;
-  parse();
-  STableDeallocScope(topScope); (* universe *)
+  parse;
+  STableDeallocScope(topScope) (* universe *)
 END NPC0.
