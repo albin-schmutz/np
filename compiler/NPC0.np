@@ -55,6 +55,8 @@ CONST
   ErrParamsTooFew = MinInt + 36;
   ErrNameMismatch = MinInt + 37;
 
+  ErrOffsetTooBig = MinInt + 50;
+
   MaxTypes = 20;
   MaxSymbols = 550;
   Marker = MaxSymbols - 1;
@@ -65,6 +67,14 @@ CONST
 
   FormBool = 1; FormChar = 2; FormInt = 3;
   FormArray = 8; FormRecord = 9;
+
+  RegGP = 11; (* global pointer *)
+  RegFP = 12; (* frame pointer *)
+  RegSP = 13; (* stack pointer *)
+  RegRT = 14; (* return register *)
+  RegPC = 15; (* program counter *)
+
+  OcMOVI = 16; OcSTW = 27; OcPOP = 28; OcSYS = 31;
 
 
 TYPE
@@ -141,6 +151,8 @@ VAR
   level : INTEGER; (* level of nested procedures *)
   boolType : INTEGER; charType : INTEGER; intType : INTEGER;
   varsize : INTEGER;
+
+  pc : INTEGER; (* program counter *)
 
 
 (* sys calls *)
@@ -608,8 +620,8 @@ PROCEDURE STableAllocType(VAR t : INTEGER; form : INTEGER;
       types[freeTypes].len := 0;
       types[freeTypes].value := -1;
       t := freeTypes;
-      (*LOG*)
-      PrintChars(59415420H); PrintInt(t); PrintChar(9);
+      (*LOG
+      PrintChars(59415420H); PrintInt(t); PrintChar(9);*)
       freeTypes := types[t].link;
       types[t].link := link
     ELSE
@@ -671,8 +683,8 @@ PROCEDURE STableAllocSymbol(class : INTEGER);
       symbols[freeSymbols].value := 0;
       symbols[freeSymbols].value2 := 0;
       allocSymbol := freeSymbols;
-      (*LOG*)
-      PrintChars(59415320H); PrintInt(allocSymbol); PrintChar(9);
+      (*LOG
+      PrintChars(59415320H); PrintInt(allocSymbol); PrintChar(9);*)
       freeSymbols := symbols[allocSymbol].next;
       symbols[allocSymbol].next := Marker
     ELSE
@@ -714,22 +726,22 @@ PROCEDURE STableDeallocScope(scope : INTEGER);
             type(types[t].value)
           END;
           types[t].link := freeTypes;
-          (*LOG*)
-          PrintChars(59445420H); PrintInt(t); PrintChar(9);
+          (*LOG
+          PrintChars(59445420H); PrintInt(t); PrintChar(9);*)
           freeTypes := t
         ELSIF types[t].form = FormRecord THEN
           STableDeallocScope(types[t].value);
           types[t].link := freeTypes;
-          (*LOG*)
-          PrintChars(59445420H); PrintInt(t); PrintChar(9);
+          (*LOG
+          PrintChars(59445420H); PrintInt(t); PrintChar(9);*)
           freeTypes := t
         END
       END type;
 
 
     BEGIN (* symbol *)
-      (*LOG*)
-      PrintChars(59445320H); PrintInt(y); PrintChar(9);
+      (*LOG
+      PrintChars(59445320H); PrintInt(y); PrintChar(9);*)
       IF symbols[y].class = ClassProc THEN
         STableDeallocScope(symbols[y].scope)
       END;
@@ -810,6 +822,42 @@ PROCEDURE GenAlign(VAR size : INTEGER);
       size := size + (i - j)
     END
   END GenAlign;
+
+
+PROCEDURE GenEmit(instr : INTEGER);
+
+  BEGIN
+    code[pc] := instr; pc := pc + 1
+  END GenEmit;
+
+
+PROCEDURE GenEmitOc1(oc : INTEGER; a : INTEGER);
+
+  BEGIN
+    GenEmit(oc + a * 64)
+  END GenEmitOc1;
+
+
+PROCEDURE GenEmitOc2(oc : INTEGER; a : INTEGER; b : INTEGER);
+
+  BEGIN
+    IF (b >= -0FFFFFH) & (b < 0FFFFFH)  THEN
+      GenEmit(oc + a * 64 + b * 1024)
+    ELSE
+      GenEmit(oc + 8 + a * 64);
+      GenEmit(b)
+    END
+  END GenEmitOc2;
+
+
+PROCEDURE GenEmitOc3(oc : INTEGER; a : INTEGER; b : INTEGER; c : INTEGER);
+
+  BEGIN
+    IF (c < -20000H) & (c >= 20000H) THEN
+      ScannerRaiseError(ErrOffsetTooBig)
+    END;
+    GenEmit(oc + a * 64 + b * 1024 + c * 16384)
+  END GenEmitOc3;
 
 
 (* parser *)
@@ -1492,8 +1540,8 @@ PROCEDURE parse;
           accept(TokEq);
           ScannerNext;
           constExpr(symbols[y].value);
-          (*LOG*)
-          PrintChars(50303020H); PrintInt(symbols[y].value); PrintChar(9);
+          (*LOG
+          PrintChars(50303020H); PrintInt(symbols[y].value); PrintChar(9);*)
           symbols[y].type := intType;
           accept(TokSemic);
           ScannerNext
@@ -1653,5 +1701,16 @@ BEGIN
   STableInitUniverse;
   level := 0;
   parse;
-  STableDeallocScope(topScope) (* universe *)
+  STableDeallocScope(topScope) (* universe *);
+
+  (* test for runtime *)
+  pc := 0;
+  GenEmitOc3(OcMOVI, 0, 0, 67); (* character r[0] := 'C' *)
+  GenEmitOc3(OcSTW, 0, RegGP, -4); (* to GP-4 (first var) *)
+  GenEmitOc3(OcSYS, 0, 0, -3); (* syscall putchar *)
+  GenEmitOc3(OcPOP, RegPC, RegSP, 0);
+  GenEmit(varsize);
+  GenEmit(0); (* entry point offset *)
+  GenEmit(-1); (* end marker *)
+  SysCall(-4)
 END NPC0.
