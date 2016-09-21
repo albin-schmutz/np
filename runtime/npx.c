@@ -222,7 +222,7 @@ static void run(void)
 	SP -= WORD_SIZE; *((int*)SP) = 0;
 	while (PC) {
 		int ir = *((int*)PC);
-		/*fprintf(stderr, "PC:%08x(%04x) ir:%08x oc:%i\n",
+		/*fprintf(stderr, "PC:%08x(%04x) ir:%08x oc:%i ",
 			PC, (PC - GP), ir, ir & BIT_OC_MASK);*/
 		PC += WORD_SIZE;
 		int oc = ir & 0x3f;
@@ -240,6 +240,7 @@ static void run(void)
 		} else {
 			c = ir >> BIT_OC;
 		}
+		/*fprintf(stderr, "a:%i b:%i c:%i\n", a, b, c);*/
 		switch (ir & BIT_OC_MASK) {
 		case OC_MOV: case OC_MOVI: case OC_MOVI2:
 			r[a] = c << b;

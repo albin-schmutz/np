@@ -1,0 +1,11 @@
+MODULE TestAssign;
+
+VAR
+
+  a : CHAR; b : CHAR;
+
+
+BEGIN
+  b := 42X (* 'B' *);
+  a := b
+END TestAssign.

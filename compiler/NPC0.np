@@ -56,6 +56,8 @@ CONST
   ErrNameMismatch = MinInt + 37;
 
   ErrOffsetTooBig = MinInt + 50;
+  ErrAllocRec = MinInt + 51;
+  ErrFreeReg = MinInt + 52;
 
   MaxTypes = 20;
   MaxSymbols = 550;
@@ -64,6 +66,8 @@ CONST
   ClassScope = 1; ClassConst = 2; ClassType = 3;
   ClassVar = 4; ClassProc = 5; ClassField = 6;
   ClassFunc = 7;
+
+  ModeReg = 10; ModeCond = 11;
 
   FormBool = 1; FormChar = 2; FormInt = 3;
   FormArray = 8; FormRecord = 9;
@@ -74,7 +78,10 @@ CONST
   RegRT = 14; (* return register *)
   RegPC = 15; (* program counter *)
 
-  OcMOVI = 16; OcSTW = 27; OcPOP = 28; OcSYS = 31;
+  OcMOVI = 16;
+  OcLDB = 24; OcLDW = 25; OcSTB = 26; OcSTW = 27;
+  OcPOP = 28;
+  OcSYS = 31;
 
 
 TYPE
@@ -135,7 +142,7 @@ TYPE
 VAR
 
   envParam : INTEGER;
-  code : ARRAY 10 OF INTEGER;
+  code : ARRAY 1000 OF INTEGER;
 
   keywordLens : ARRAY 10 OF INTEGER;
   keywords : ARRAY NbrKeywords OF Keyword;
@@ -152,8 +159,9 @@ VAR
   boolType : INTEGER; charType : INTEGER; intType : INTEGER;
   varsize : INTEGER;
 
+  regstack : INTEGER;
   pc : INTEGER; (* program counter *)
-
+  entrypoint : INTEGER;
 
 (* sys calls *)
 
@@ -824,6 +832,33 @@ PROCEDURE GenAlign(VAR size : INTEGER);
   END GenAlign;
 
 
+PROCEDURE GenAllocReg(VAR r : INTEGER);
+
+  BEGIN
+    IF regstack < RegGP THEN
+      r := regstack;
+      (*LOG
+      PrintChars(47415220H); PrintInt(r); PrintChar(0AH);*)
+      regstack := regstack + 1
+    ELSE
+      ScannerRaiseError(ErrAllocRec)
+    END
+  END GenAllocReg;
+
+
+PROCEDURE GenFreeReg(r : INTEGER);
+
+  BEGIN
+    IF regstack - 1 = r THEN
+      (*LOG
+      PrintChars(47465220H); PrintInt(r); PrintChar(0AH);*)
+      regstack := r
+    ELSE
+      ScannerRaiseError(ErrFreeReg)
+    END
+  END GenFreeReg;
+
+
 PROCEDURE GenEmit(instr : INTEGER);
 
   BEGIN
@@ -831,33 +866,96 @@ PROCEDURE GenEmit(instr : INTEGER);
   END GenEmit;
 
 
-PROCEDURE GenEmitOc1(oc : INTEGER; a : INTEGER);
-
-  BEGIN
-    GenEmit(oc + a * 64)
-  END GenEmitOc1;
-
-
-PROCEDURE GenEmitOc2(oc : INTEGER; a : INTEGER; b : INTEGER);
-
-  BEGIN
-    IF (b >= -0FFFFFH) & (b < 0FFFFFH)  THEN
-      GenEmit(oc + a * 64 + b * 1024)
-    ELSE
-      GenEmit(oc + 8 + a * 64);
-      GenEmit(b)
-    END
-  END GenEmitOc2;
-
-
 PROCEDURE GenEmitOc3(oc : INTEGER; a : INTEGER; b : INTEGER; c : INTEGER);
 
   BEGIN
-    IF (c < -20000H) & (c >= 20000H) THEN
-      ScannerRaiseError(ErrOffsetTooBig)
-    END;
-    GenEmit(oc + a * 64 + b * 1024 + c * 16384)
+    (*LOG
+    PrintChars(47454D20H);
+    PrintInt(oc); PrintChar(20H);
+    PrintInt(a); PrintChar(20H);
+    PrintInt(b); PrintChar(20H);
+    PrintInt(c); PrintChar(0AH);*)
+    IF (c >= -20000H) & (c < 20000H) THEN
+      GenEmit(oc + a * 64 + b * 1024 + c * 16384)
+    ELSE
+      GenEmit(oc + 16 + a * 64 + b * 1024);
+      GenEmit(b)
+    END
   END GenEmitOc3;
+
+
+PROCEDURE GenMake(VAR g : Gen; VAR y : Symbol);
+
+  BEGIN
+    g.mode := y.class;
+    g.type := y.type;
+    g.size := types[y.type].size;
+    g.level := y.level;
+    g.addr1 := y.value;
+    g.addr2 := y.value2;
+    IF g.level = 0 THEN
+      g.reg := RegGP
+    ELSE
+      g.reg := RegFP
+    END
+    (*LOG
+    PrintChars(474D4B20H);
+    PrintInt(g.mode); PrintChar(20H);
+    PrintInt(g.addr1); PrintChar(20H);
+    PrintInt(g.addr2); PrintChar(20H);
+    PrintInt(g.reg); PrintChar(0AH)*)
+  END GenMake;
+
+
+PROCEDURE GenLoad(VAR g : Gen);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF g.mode # ModeReg THEN
+      (*LOG
+      PrintChars(474C4420H);
+      PrintInt(g.mode); PrintChar(0AH);*)
+      IF g.mode = ClassConst THEN
+        GenAllocReg(g.reg);
+        GenEmitOc3(OcMOVI, g.reg, 0, g.addr1)
+      ELSIF g.mode = ClassVar THEN
+        GenAllocReg(r);
+        IF g.size = 1 THEN
+          GenEmitOc3(OcLDB, r, g.reg, g.addr1)
+        ELSE
+          GenEmitOc3(OcLDW, r, g.reg, g.addr1)
+        END;
+        (*GenFreeReg(g.reg);*)
+        g.reg := r
+      ELSIF g.mode = ModeCond THEN
+        g.mode := ModeCond;
+        GenAllocReg(g.reg)
+      END;
+      g.mode := ModeReg
+    END
+  END GenLoad;
+
+
+PROCEDURE GenStore(VAR g : Gen; VAR g2 : Gen);
+
+  BEGIN
+    (*LOG
+    PrintChars(47535420H);
+    PrintInt(g.reg); PrintChar(20H);
+    PrintInt(g.mode); PrintChar(0AH);*)
+    GenLoad(g2);
+    (*LOG
+    PrintChars(47535420H);
+    PrintInt(g2.reg); PrintChar(20H);
+    PrintInt(g2.mode); PrintChar(0AH);*)
+    IF g.size = 1 THEN
+      GenEmitOc3(OcSTB, g2.reg, g.reg, g.addr1)
+    ELSE
+      GenEmitOc3(OcSTW, g2.reg, g.reg, g.addr1)
+    END;
+    GenFreeReg(g2.reg)
+  END GenStore;
 
 
 (* parser *)
@@ -1180,9 +1278,7 @@ PROCEDURE parse;
               IF symbols[y].class = ClassFunc THEN
                 stdFunc(g, symbols[y])
               ELSE
-                g.mode := symbols[y].class;
-                g.type := symbols[y].type;
-                g.addr1 := symbols[y].value;
+                GenMake(g, symbols[y]);
                 ScannerNext;
                 selector(g)
               END
@@ -1400,7 +1496,7 @@ PROCEDURE parse;
             g2.expConst := FALSE;
             expr(g2);
             IF g.type = g2.type THEN
-              g.type := g2.type
+              GenStore(g, g2)
             ELSE
               ScannerRaiseError(ErrIncompTypes)
             END
@@ -1684,6 +1780,7 @@ PROCEDURE parse;
     topScope := allocSymbol;
     varsize := 0;
     decls(varsize);
+    entrypoint := pc;
     IF source.token = TokBegin THEN
       ScannerNext; stmts
     END;
@@ -1699,18 +1796,15 @@ BEGIN
   ScannerInitialize; ScannerReadChar; STableInitialize;
   STableAllocSymbol(ClassScope); topScope := allocSymbol;
   STableInitUniverse;
-  level := 0;
+  level := 0; regstack := 0; pc := 0; 
   parse;
   STableDeallocScope(topScope) (* universe *);
 
   (* test for runtime *)
-  pc := 0;
-  GenEmitOc3(OcMOVI, 0, 0, 67); (* character r[0] := 'C' *)
-  GenEmitOc3(OcSTW, 0, RegGP, -4); (* to GP-4 (first var) *)
   GenEmitOc3(OcSYS, 0, 0, -3); (* syscall putchar *)
   GenEmitOc3(OcPOP, RegPC, RegSP, 0);
   GenEmit(varsize);
-  GenEmit(0); (* entry point offset *)
+  GenEmit(entrypoint * 4); (* entry point offset *)
   GenEmit(-1); (* end marker *)
   SysCall(-4)
 END NPC0.
