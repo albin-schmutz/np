@@ -1,0 +1,30 @@
+MODULE TestParam;
+
+VAR
+
+  a : CHAR;
+
+
+(*PROCEDURE X(x : CHAR);
+
+  BEGIN
+    a := x
+  END X;*)
+
+PROCEDURE Y(VAR x : CHAR; y : CHAR);
+
+  BEGIN
+    x := y
+  END Y;
+
+PROCEDURE Z(VAR x : CHAR);
+
+  BEGIN
+    Y(x, 43X)
+  END Z;
+
+BEGIN
+  (*X(41X (* 'A' *))*)
+  (*Y(a, 42X (* 'B' *))*)
+  Z(a)
+END TestParam.
