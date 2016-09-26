@@ -74,8 +74,8 @@ CONST
   RegRT = 14; (* return register *)
   RegPC = 15; (* program counter *)
 
-
-  OcMOV = 8; OcMOVI = 16;
+  OcMOV = 8; OcMVN = 9; OcMOVI = 16;
+  OcMUL = 11; OcDIV = 12; OcMOD = 13; OcADD = 14; OcSUB = 15;
   OcADDI = 22;
   OcLDB = 24; OcLDW = 25; OcSTB = 26; OcSTW = 27;
   OcPOP = 28; OcPSH = 29;
@@ -1003,6 +1003,53 @@ PROCEDURE GenParam(VAR g : Gen; isRef : BOOLEAN);
   END GenParam;
 
 
+PROCEDURE GenOp(op : INTEGER; VAR g : Gen; VAR g2 : Gen);
+
+  BEGIN
+    GenLoad(g);
+    IF g2.mode = ClassConst THEN
+      GenEmitOc3(op + 8, g.reg, g.reg, g2.addr1)
+    ELSE
+      GenLoad(g2);
+      GenEmitOc3(op, g.reg, g.reg, g2.reg);
+      IF regstack - 1 = g2.reg THEN
+        regstack := g2.reg
+      END
+    END
+  END GenOp;
+
+
+PROCEDURE GenOp1(VAR g : Gen; op : INTEGER);
+
+  BEGIN
+    IF op = TokMinus THEN
+      IF g.mode = ClassVar THEN
+        GenLoad(g)
+      END;
+      GenEmitOc3(OcMVN, g.reg, 0, g.reg)
+    END
+  END GenOp1;
+
+
+PROCEDURE GenOp2(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+  BEGIN
+    IF types[g.type].form = FormInt THEN
+      IF op = TokAsterisk THEN
+        GenOp(OcMUL, g, g2)
+      ELSIF op = TokDiv THEN
+        GenOp(OcDIV, g, g2)
+      ELSIF op = TokMod THEN
+        GenOp(OcMOD, g, g2)
+      ELSIF op = TokPlus THEN
+        GenOp(OcADD, g, g2)
+      ELSIF op = TokMinus THEN
+        GenOp(OcSUB, g, g2)
+      END
+    END
+  END GenOp2;
+
+
 (* parser *)
 
 
@@ -1121,6 +1168,8 @@ PROCEDURE parse;
             ELSE
               ScannerRaiseError(ErrIntOverflow)
             END
+          ELSE
+            GenOp1(g, op)
           END
         END
       END Op1;
@@ -1213,9 +1262,9 @@ PROCEDURE parse;
               add(g, g2)
             ELSIF op = TokMinus THEN
               sub(g, g2)
-            ELSE
-              ScannerRaiseError(MinInt + 102)
             END
+          ELSE
+            GenOp2(g, g2, op)
           END
         END
       END Op2;
