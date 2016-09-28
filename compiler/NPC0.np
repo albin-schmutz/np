@@ -937,7 +937,7 @@ PROCEDURE GenEmitCondBR(cond : INTEGER; disp : INTEGER; negated : BOOLEAN);
 PROCEDURE GenBCall(l : INTEGER);
 
   BEGIN
-    GenEmitOc1(OcCALL, -(pc + l + 1))
+    GenEmitOc1(OcCALL, -l - pc - 1)
   END GenBCall;
 
 
@@ -947,6 +947,21 @@ PROCEDURE GenFCall(VAR l : INTEGER);
     GenEmitOc1(OcCALL, -l);
     l := -(pc - 1)
   END GenFCall;
+
+
+PROCEDURE GenBJump(l : INTEGER);
+
+  BEGIN
+    GenEmitOc1(OcJUMP, l - pc - 1)
+  END GenBJump;
+
+
+PROCEDURE GenFJump(VAR l : INTEGER);
+
+  BEGIN
+    GenEmitOc1(OcJUMP, l);
+    l := pc - 1
+  END GenFJump;
 
 
 PROCEDURE GenEnter(varsize : INTEGER);
@@ -1066,13 +1081,6 @@ PROCEDURE GenCondFJump(VAR g : Gen);
     GenFixLink(g.addr2);
     g.addr1 := pc - 1
   END GenCondFJump;
-
-
-PROCEDURE GenBJump(l : INTEGER);
-
-  BEGIN
-    GenEmitOc1(OcJUMP, l - pc - 1)
-  END GenBJump;
 
 
 PROCEDURE GenStore(VAR g : Gen; VAR g2 : Gen);
@@ -1840,28 +1848,38 @@ PROCEDURE parse;
 
       PROCEDURE if;
 
-        VAR g : Gen;
+        VAR g : Gen; l : INTEGER;
 
         BEGIN
           ScannerNext;
           g.expConst := FALSE;
           expr(g);
           checkBool(g);
+          GenCondFJump(g);
           accept(TokThen);
           ScannerNext;
           stmts;
+          l := 0;
           WHILE source.token = TokElsif DO
+            GenFJump(l);
+            GenFixLink(g.addr1);
             ScannerNext;
             expr(g);
             checkBool(g);
+            GenCondFJump(g);
             accept(TokThen);
             ScannerNext;
             stmts
           END;
           IF source.token = TokElse THEN
+            GenFJump(l);
+            GenFixLink(g.addr1);
             ScannerNext;
             stmts
+          ELSE
+            GenFixLink(g.addr1)
           END;
+          GenFixLink(l);
           accept(TokEnd);
           ScannerNext
         END if;
