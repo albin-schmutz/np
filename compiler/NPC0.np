@@ -1053,6 +1053,28 @@ PROCEDURE GenLoadCond(VAR g : Gen);
   END GenLoadCond;
 
 
+PROCEDURE GenCondFJump(VAR g : Gen);
+
+  BEGIN
+    GenLoadCond(g);
+    GenEmitCondBR(g.cond, g.addr1, TRUE);
+    IF regstack - 1 = g.reg THEN
+      regstack := g.reg
+    ELSE
+      ScannerRaiseError(MinInt + 100)
+    END;
+    GenFixLink(g.addr2);
+    g.addr1 := pc - 1
+  END GenCondFJump;
+
+
+PROCEDURE GenBJump(l : INTEGER);
+
+  BEGIN
+    GenEmitOc1(OcJUMP, l - pc - 1)
+  END GenBJump;
+
+
 PROCEDURE GenStore(VAR g : Gen; VAR g2 : Gen);
 
   BEGIN
@@ -1847,16 +1869,20 @@ PROCEDURE parse;
 
       PROCEDURE while;
 
-        VAR g : Gen;
+        VAR g : Gen; l : INTEGER;
 
         BEGIN
           ScannerNext;
+          l := pc;
           g.expConst := FALSE;
           expr(g);
           checkBool(g);
+          GenCondFJump(g);
           accept(TokDo);
           ScannerNext;
           stmts;
+          GenBJump(l);
+          GenFixLink(g.addr1);
           accept(TokEnd);
           ScannerNext
         END while;
@@ -2070,6 +2096,7 @@ BEGIN
 
   (* test for runtime *)
   GenEmitOc3(OcSYS, 0, 0, -5); (* dump regs *)
+  GenEmitOc3(OcSYS, 0, 0, -3); (* put char *)
   GenEmitOc3(OcPOP, RegPC, RegSP, 0);
   GenEmit(varsize);
   GenEmit(entrypoint * 4); (* entry point offset *)

@@ -1,0 +1,12 @@
+MODULE TestWhile;
+
+VAR x : INTEGER; y : INTEGER;
+
+
+BEGIN
+  x := 36; y := 0;
+  WHILE y < 10 DO
+    x := x + 3; y := y + 1
+  END
+  (* x = 66 ('B') *)
+END TestWhile.
