@@ -1,0 +1,7 @@
+MODULE TestSys;
+
+VAR x : INTEGER;
+
+BEGIN
+  SYS(-5)
+END TestSys.

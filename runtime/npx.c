@@ -63,6 +63,15 @@ static void dump_regs(void)
 	}
 }
 
+static void write_file(int mem[])
+{
+	FILE *f = fopen("out", "wb");
+	int i = 0;
+	while (mem[i] != -1) i++;
+	fwrite(mem, 1, i * 4, f);
+	fclose(f);
+}
+
 /*
  *
  * single memory model
@@ -180,11 +189,13 @@ static void sys(int nr, int *res, int par)
 		dump_regs();
 		break;
 	case -4:
+		write_file((int*)(GP - 8));
 		break;
 	case -3:
 		putchar(*((int*)(GP - 4)));
 		break;
 	case -2:
+		*((int*)(GP - 4)) = getchar();
 		break;
 	case -1:
 	case 0:

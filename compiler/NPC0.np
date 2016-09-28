@@ -11,10 +11,10 @@ CONST
   TokIdent = -1; TokInt = -2; TokChar = -3;
 
   TokDo = 1; TokIf = 2; TokOf = 3; TokOr = 4; TokDiv = 5; TokEnd = 6;
-  TokMod = 7; TokVar = 8; TokElse = 9; TokThen = 10; TokTrue = 11;
-  TokType = 12; TokArray = 13; TokBegin = 14; TokConst = 15; TokElsif = 16;
-  TokFalse = 17; TokWhile = 18; TokModule = 19; TokRecord = 20;
-  TokProcedure = 21; NbrKeywords = 22;
+  TokMod = 7; TokSys = 8; TokVar = 9; TokElse = 10; TokThen = 11;
+  TokTrue = 12; TokType = 13; TokArray = 14; TokBegin = 15; TokConst = 16;
+  TokElsif = 17; TokFalse = 18; TokWhile = 19; TokModule = 20;
+  TokRecord = 21; TokProcedure = 22; NbrKeywords = 23;
 
   TokAmper = 26H; TokAssign = 3A3DH; TokAsterisk = 2AH; TokBraceL = 7BH;
   TokBraceR = 7DH; TokBrackL = 5BH; TokBrackR = 5DH; TokColon = 3AH;
@@ -179,9 +179,19 @@ PROCEDURE SysCall(nr : INTEGER);
       EnvLayer.PutChar(envParam)
     ELSIF nr = -4 THEN
       EnvLayer.WriteFile(code)
-    END;
+    END
     (*repl1*)
-    nr := nr
+    (*repl2
+    IF nr = -1 THEN
+      SYS(-1)
+    ELSIF nr = -2 THEN
+      SYS(-2)
+    ELSIF nr = -3 THEN
+      SYS(-3)
+    ELSIF nr = -4 THEN
+      SYS(-4)
+    END
+    repl3*)
   END SysCall;
 
 
@@ -301,6 +311,7 @@ PROCEDURE ScannerInitialize;
     enterKW(TokDiv, 564944H, 0, 0);
     enterKW(TokEnd, 444E45H, 0, 0);
     enterKW(TokMod, 444F4DH, 0, 0);
+    enterKW(TokSys, 535953H, 0, 0);
     enterKW(TokVar, 524156H, 0, 0);
     keywordLens[3] := TokVar;
     enterKW(TokElse, 45534C45H, 0, 0);
@@ -1255,6 +1266,13 @@ PROCEDURE GenRel(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
   END GenRel;
 
 
+PROCEDURE GenSys(call : INTEGER);
+
+  BEGIN
+    GenEmitOc3(OcSYS, 0, 0, call)
+  END GenSys;
+
+
 (* parser *)
 
 
@@ -1789,6 +1807,21 @@ PROCEDURE parse;
       VAR y : INTEGER;
 
 
+      PROCEDURE sys;
+
+        VAR call : INTEGER;
+
+        BEGIN
+          ScannerNext;
+          accept(TokParenL);
+          ScannerNext;
+          constExpr(call);
+          accept(TokParenR);
+          GenSys(call);
+          ScannerNext
+        END sys;
+
+
       PROCEDURE assign;
 
         VAR g : Gen; g2 : Gen;
@@ -1928,6 +1961,8 @@ PROCEDURE parse;
           ELSE
             assign
           END
+        ELSIF source.token = TokSys THEN
+          sys
         ELSIF source.token = TokIf THEN
           if
         ELSIF source.token = TokWhile THEN
@@ -2127,8 +2162,6 @@ BEGIN
   STableDeallocScope(topScope) (* universe *);
 
   (* test for runtime *)
-  GenEmitOc3(OcSYS, 0, 0, -5); (* dump regs *)
-  GenEmitOc3(OcSYS, 0, 0, -3); (* put char *)
   GenEmitOc3(OcPOP, RegPC, RegSP, 0);
   GenEmit(varsize);
   GenEmit(entrypoint * 4); (* entry point offset *)
