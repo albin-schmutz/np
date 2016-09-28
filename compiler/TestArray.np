@@ -1,0 +1,13 @@
+MODULE TestArray;
+
+VAR x : INTEGER; y : ARRAY 10 OF INTEGER;
+
+
+BEGIN
+  x := 0;
+  WHILE x < 10 DO
+    x := x + 1;
+    y[x] := x * x
+  END;
+  x := y[8] + 1
+END TestArray.

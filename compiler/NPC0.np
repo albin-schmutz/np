@@ -54,6 +54,7 @@ CONST
   ErrParamsTooMany = MinInt + 35;
   ErrParamsTooFew = MinInt + 36;
   ErrNameMismatch = MinInt + 37;
+  ErrBadIndex = MinInt + 38;
 
   MaxTypes = 20;
   MaxSymbols = 550;
@@ -76,7 +77,7 @@ CONST
 
   OcMOV = 8; OcMVN = 9; OcCMP = 10; OcMOVI = 16; OcCMPI = 18; 
   OcMUL = 11; OcDIV = 12; OcMOD = 13; OcADD = 14; OcSUB = 15;
-  OcADDI = 22;
+  OcMULI =19; OcADDI = 22; 
   OcLDB = 24; OcLDW = 25; OcSTB = 26; OcSTW = 27;
   OcPOP = 28; OcPSH = 29;
   OcSYS = 31;
@@ -1036,11 +1037,6 @@ PROCEDURE GenLoad(VAR g : Gen);
         regstack := regstack + 1
       ELSIF g.mode = ModeCond THEN
         GenEmitCondBR(g.cond, 2, TRUE);
-        IF regstack - 1 = g.reg THEN
-          regstack := g.reg
-        ELSE
-          ScannerRaiseError(MinInt + 100)
-        END;
         GenFixLink(g.addr2);
         GenEmitOc3(OcMOVI, regstack, 0, 1);
         GenEmitOc1(OcJUMP, 1);
@@ -1073,11 +1069,6 @@ PROCEDURE GenCondFJump(VAR g : Gen);
   BEGIN
     GenLoadCond(g);
     GenEmitCondBR(g.cond, g.addr1, TRUE);
-    IF regstack - 1 = g.reg THEN
-      regstack := g.reg
-    ELSE
-      ScannerRaiseError(MinInt + 100)
-    END;
     GenFixLink(g.addr2);
     g.addr1 := pc - 1
   END GenCondFJump;
@@ -1126,6 +1117,37 @@ PROCEDURE GenParam(VAR g : Gen; isRef : BOOLEAN);
   END GenParam;
 
 
+PROCEDURE GenField(VAR g : Gen; VAR y : Symbol);
+
+  BEGIN
+    g.addr1 := g.addr1 + y.value
+  END GenField;
+
+
+PROCEDURE GenIndex(VAR g : Gen; VAR g2 : Gen);
+
+  VAR size : INTEGER;
+
+  BEGIN
+    size := types[types[g.type].value].size;
+    IF g2.mode = ClassConst THEN
+      IF (g2.addr1 >= 0) &
+         (g2.addr1 < types[g.type].len) THEN
+        g.addr1 := g.addr1 + g2.addr1 * size
+      ELSE
+        ScannerRaiseError(ErrBadIndex)
+      END
+    ELSE
+      GenLoad(g2);
+      IF size > 1 THEN
+        GenEmitOc3(OcMULI, g2.reg, g2.reg, size)
+      END;
+      GenEmitOc3(OcADD, g2.reg, g2.reg, g.reg);
+      g.reg := g2.reg
+    END
+  END GenIndex;
+
+
 PROCEDURE GenOp(op : INTEGER; VAR g : Gen; VAR g2 : Gen);
 
   BEGIN
@@ -1162,22 +1184,12 @@ PROCEDURE GenOp1(VAR g : Gen; op : INTEGER);
     ELSIF op = TokAmper THEN
       GenLoadCond(g);
       GenEmitCondBR(g.cond, g.addr1, TRUE);
-      IF regstack - 1 = g.reg THEN
-        regstack := g.reg
-      ELSE
-        ScannerRaiseError(MinInt + 100)
-      END;
       g.addr1 := pc - 1;
       GenFixLink(g.addr2);
       g.addr2 := 0
     ELSIF op = TokOr THEN
       GenLoadCond(g);
       GenEmitCondBR(g.cond, g.addr2, FALSE);
-      IF regstack - 1 = g.reg THEN
-        regstack := g.reg
-      ELSE
-        ScannerRaiseError(MinInt + 100)
-      END;
       g.addr2 := pc - 1;
       GenFixLink(g.addr1);
       g.addr1 := 0
@@ -1491,6 +1503,7 @@ PROCEDURE parse;
                     g2.expConst := FALSE;
                     expr(g2);
                     checkInt(g2);
+                    GenIndex(g, g2);
                     accept(TokBrackR);
                     g.type := types[g.type].value;
                     g.size := types[g.type].size
@@ -1506,7 +1519,8 @@ PROCEDURE parse;
                     y := symbols[y].next;
                     IF y > 0 THEN
                       g.type := symbols[y].type;
-                      g.size := types[symbols[y].type].size
+                      g.size := types[symbols[y].type].size;
+                      GenField(g, symbols[y])
                     ELSE
                       ScannerRaiseError(ErrIdentUndef)
                     END
