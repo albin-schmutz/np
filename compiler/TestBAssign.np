@@ -1,0 +1,10 @@
+MODULE TestBAssign;
+
+VAR
+
+  f : BOOLEAN;
+
+
+BEGIN
+  f := (88 = 88) & (99 = 98)
+END TestBAssign.

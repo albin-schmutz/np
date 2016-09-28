@@ -74,13 +74,14 @@ CONST
   RegRT = 14; (* return register *)
   RegPC = 15; (* program counter *)
 
-  OcMOV = 8; OcMVN = 9; OcMOVI = 16;
+  OcMOV = 8; OcMVN = 9; OcCMP = 10; OcMOVI = 16; OcCMPI = 18; 
   OcMUL = 11; OcDIV = 12; OcMOD = 13; OcADD = 14; OcSUB = 15;
   OcADDI = 22;
   OcLDB = 24; OcLDW = 25; OcSTB = 26; OcSTW = 27;
   OcPOP = 28; OcPSH = 29;
   OcSYS = 31;
-  OcCALL = 49;
+  OcJUMP = 48; OcCALL = 49;
+  OcBEQ = 50; OcBNE = 51; OcBLS = 52; OcBGE = 53; OcBLE = 54; OcBGT = 55;
 
 
 TYPE
@@ -867,6 +868,72 @@ PROCEDURE GenEmitOc3(oc : INTEGER; a : INTEGER; b : INTEGER; c : INTEGER);
   END GenEmitOc3;
 
 
+PROCEDURE GenFixLink(l : INTEGER);
+
+  VAR l2 : INTEGER;
+
+  BEGIN
+    WHILE l # 0 DO
+      l2 := code[l];
+      code[l] := l2 MOD 64 + 64 * (pc - l - 1);
+      l := l2 DIV 64
+    END
+  END GenFixLink;
+
+
+PROCEDURE GenMergeLinks(VAR l : INTEGER ; l2 : INTEGER);
+
+  VAR l3 : INTEGER; l4 : INTEGER; l5 : INTEGER; continue : BOOLEAN;
+
+  BEGIN
+    IF l2 # 0 THEN
+      l3 := l2;
+      continue := TRUE;
+      WHILE continue DO
+        code[l3] := l4;
+        l5 := l4 DIV 64;
+        IF l5 = 0 THEN
+          continue := FALSE
+        ELSE
+          l3 := l5
+        END
+      END;
+      code[l3] := l4 + 64 * l;
+      l := l2
+    END
+  END GenMergeLinks;
+
+
+PROCEDURE GenNegCond(VAR c : INTEGER);
+
+  BEGIN
+    IF c = TokEq THEN c := TokEqN
+    ELSIF c = TokEqN THEN c := TokEq
+    ELSIF c = TokLss THEN c := TokGEq
+    ELSIF c = TokGEq THEN c := TokLss
+    ELSIF c = TokLEq THEN c := TokGtr
+    ELSIF c = TokGtr THEN c := TokLEq
+    END
+  END GenNegCond;
+
+
+PROCEDURE GenEmitCondBR(cond : INTEGER; disp : INTEGER; negated : BOOLEAN);
+
+  VAR oc : INTEGER;
+
+  BEGIN
+    IF negated THEN GenNegCond(cond) END;
+    IF cond = TokEq THEN oc := OcBEQ
+    ELSIF cond = TokEqN THEN oc := OcBNE
+    ELSIF cond = TokLss THEN oc := OcBLS
+    ELSIF cond = TokGEq THEN oc := OcBGE
+    ELSIF cond = TokLEq THEN oc := OcBLE
+    ELSIF cond = TokGtr THEN oc := OcBGT
+    END;
+    GenEmitOc1(oc, disp)
+  END GenEmitCondBR;
+
+
 PROCEDURE GenBCall(l : INTEGER);
 
   BEGIN
@@ -953,11 +1020,37 @@ PROCEDURE GenLoad(VAR g : Gen);
         g.reg := regstack;
         regstack := regstack + 1
       ELSIF g.mode = ModeCond THEN
-        g.mode := ModeCond
+        GenEmitCondBR(g.cond, 2, TRUE);
+        IF regstack - 1 = g.reg THEN
+          regstack := g.reg
+        ELSE
+          ScannerRaiseError(MinInt + 100)
+        END;
+        GenFixLink(g.addr2);
+        GenEmitOc3(OcMOVI, regstack, 0, 1);
+        GenEmitOc1(OcJUMP, 1);
+        GenFixLink(g.addr1);
+        GenEmitOc3(OcMOVI, regstack, 0, 0);
+        g.reg := regstack;
+        regstack := regstack + 1
       END;
       g.mode := ModeReg
     END
   END GenLoad;
+
+
+PROCEDURE GenLoadCond(VAR g : Gen);
+
+  BEGIN
+    IF g.mode # ModeCond THEN
+      GenLoad(g);
+      GenEmitOc3(OcCMPI, g.reg, g.reg, 0);
+      g.mode := ModeCond;
+      g.addr1 := 0;
+      g.addr2 := 0;
+      g.cond := TokEqN
+    END
+  END GenLoadCond;
 
 
 PROCEDURE GenStore(VAR g : Gen; VAR g2 : Gen);
@@ -1021,12 +1114,43 @@ PROCEDURE GenOp(op : INTEGER; VAR g : Gen; VAR g2 : Gen);
 
 PROCEDURE GenOp1(VAR g : Gen; op : INTEGER);
 
+  VAR l : INTEGER;
+
   BEGIN
     IF op = TokMinus THEN
       IF g.mode = ClassVar THEN
         GenLoad(g)
       END;
       GenEmitOc3(OcMVN, g.reg, 0, g.reg)
+    ELSIF op = TokTilde THEN
+      IF g.mode = ClassConst THEN
+        IF g.addr1 = 1 THEN g.addr1 := 0 ELSE g.addr1 := 1 END
+      ELSE
+        GenLoadCond(g); GenNegCond(g.cond);
+        l := g.addr1; g.addr1 := g.addr2; g.addr2 := l
+      END
+    ELSIF op = TokAmper THEN
+      GenLoadCond(g);
+      GenEmitCondBR(g.cond, g.addr1, TRUE);
+      IF regstack - 1 = g.reg THEN
+        regstack := g.reg
+      ELSE
+        ScannerRaiseError(MinInt + 100)
+      END;
+      g.addr1 := pc - 1;
+      GenFixLink(g.addr2);
+      g.addr2 := 0
+    ELSIF op = TokOr THEN
+      GenLoadCond(g);
+      GenEmitCondBR(g.cond, g.addr2, FALSE);
+      IF regstack - 1 = g.reg THEN
+        regstack := g.reg
+      ELSE
+        ScannerRaiseError(MinInt + 100)
+      END;
+      g.addr2 := pc - 1;
+      GenFixLink(g.addr1);
+      g.addr1 := 0
     END
   END GenOp1;
 
@@ -1046,8 +1170,47 @@ PROCEDURE GenOp2(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
       ELSIF op = TokMinus THEN
         GenOp(OcSUB, g, g2)
       END
+    ELSE (* FormBool *)
+      IF (g.mode = ClassConst) & (g2.mode = ClassConst) THEN
+        IF op = TokOr THEN
+          IF (g.addr1 = 1) OR (g2.addr1 = 1) THEN
+            g.addr1 := 1
+          ELSE
+            g.addr1 := 0
+          END
+        ELSE (* TokAmper *)
+          IF (g.addr1 = 1) & (g2.addr1 = 1) THEN
+            g.addr1 := 1
+          ELSE
+            g.addr1 := 0
+          END
+        END
+      ELSE
+        GenLoadCond(g2);
+        IF op = TokOr THEN
+          g.addr1 := g2.addr1;
+          GenMergeLinks(g.addr2, g2.addr2)
+        ELSE (* TokAmper *)
+          GenMergeLinks(g.addr1, g2.addr1);
+          g.addr2 := g2.addr2
+        END;
+        g.cond := g2.cond
+      END
     END
+
+
   END GenOp2;
+
+
+PROCEDURE GenRel(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+  BEGIN
+    GenOp(OcCMP, g, g2);
+    g.cond := op;
+    g.mode := ModeCond;
+    g.addr1 := 0;
+    g.addr2 := 0
+  END GenRel;
 
 
 (* parser *)
@@ -1383,7 +1546,9 @@ PROCEDURE parse;
               ScannerNext
             ELSIF source.token = TokTilde THEN
               ScannerNext;
-              factor(g)
+              factor(g);
+              checkBool(g);
+              GenOp1(g, TokTilde)
             ELSE
               ScannerRaiseError(ErrFactorExp)
             END
@@ -1400,7 +1565,8 @@ PROCEDURE parse;
             IF op # TokAmper THEN
               checkInt(g)
             ELSE
-              checkBool(g)
+              checkBool(g);
+              GenOp1(g, op)
             END;
             ScannerNext;
             g2.expConst := FALSE;
@@ -1434,7 +1600,8 @@ PROCEDURE parse;
           IF op # TokOr THEN
             checkInt(g)
           ELSE
-            checkBool(g)
+            checkBool(g);
+            GenOp1(g, op)
           END;
           ScannerNext;
           g2.expConst := FALSE;
@@ -1459,6 +1626,7 @@ PROCEDURE parse;
           g2.expConst := FALSE;
           simpleExpr(g2);
           IF g.type = g2.type THEN
+            GenRel(g, g2, op);
             g.type := boolType;
             g.size := types[boolType].size
           ELSE
@@ -1901,7 +2069,7 @@ BEGIN
   STableDeallocScope(topScope) (* universe *);
 
   (* test for runtime *)
-  GenEmitOc3(OcSYS, 0, 0, -3); (* syscall putchar *)
+  GenEmitOc3(OcSYS, 0, 0, -5); (* dump regs *)
   GenEmitOc3(OcPOP, RegPC, RegSP, 0);
   GenEmit(varsize);
   GenEmit(entrypoint * 4); (* entry point offset *)
