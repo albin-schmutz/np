@@ -63,8 +63,9 @@ static void dump_regs(void)
 	}
 }
 
-static void write_file(int mem[])
+static void write_file(int par)
 {
+	int *mem = (int*)(GP + par);
 	FILE *f = fopen("out", "wb");
 	int i = 0;
 	while (mem[i] != -1) i++;
@@ -189,7 +190,7 @@ static void sys(int nr, int *res, int par)
 		dump_regs();
 		break;
 	case -4:
-		write_file((int*)(GP - 8));
+		write_file(*((int*)(GP - 4)));
 		break;
 	case -3:
 		putchar(*((int*)(GP - 4)));
@@ -233,8 +234,8 @@ static void run(void)
 	SP -= WORD_SIZE; *((int*)SP) = 0;
 	while (PC) {
 		int ir = *((int*)PC);
-		/*fprintf(stderr, "PC:%08x(%04x) ir:%08x oc:%i ",
-			PC, (PC - GP), ir, ir & BIT_OC_MASK);*/
+		fprintf(stderr, "PC:%08x(%04x) ir:%08x oc:%i ",
+			PC, (PC - GP), ir, ir & BIT_OC_MASK);
 		PC += WORD_SIZE;
 		int oc = ir & 0x3f;
 		int a, b, c;
@@ -251,7 +252,7 @@ static void run(void)
 		} else {
 			c = ir >> BIT_OC;
 		}
-		/*fprintf(stderr, "a:%i b:%i c:%i\n", a, b, c);*/
+		fprintf(stderr, "a:%i b:%i c:%i\n", a, b, c);
 		switch (ir & BIT_OC_MASK) {
 		case OC_MOV: case OC_MOVI: case OC_MOVI2:
 			r[a] = c << b;
