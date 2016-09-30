@@ -1,3 +1,3 @@
-npc00.exe < NPC0.np
-del NPC0.npx
-ren out NPC0.npx
+..\runtime\npx.exe NPC0.npx < %1%.np
+del %1%.npx
+ren out %1%.npx
