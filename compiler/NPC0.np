@@ -1,13 +1,2182 @@
 MODULE NPC0;
 
+
+CONST
+
+  MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
+  MaxLenInt = 11; MaxLenIdent = 32;
+
+  TokIdent = -1; TokInt = -2; TokChar = -3;
+
+  TokDo = 1; TokIf = 2; TokOf = 3; TokOr = 4; TokDiv = 5; TokEnd = 6;
+  TokMod = 7; TokSys = 8; TokVar = 9; TokElse = 10; TokThen = 11;
+  TokTrue = 12; TokType = 13; TokArray = 14; TokBegin = 15; TokConst = 16;
+  TokElsif = 17; TokFalse = 18; TokWhile = 19; TokModule = 20;
+  TokRecord = 21; TokProcedure = 22; NbrKeywords = 23;
+
+  TokAmper = 26H; TokAssign = 3A3DH; TokAsterisk = 2AH; TokBraceL = 7BH;
+  TokBraceR = 7DH; TokBrackL = 5BH; TokBrackR = 5DH; TokColon = 3AH;
+  TokComma = 2CH; TokDot = 2EH; TokMinus = 2DH; TokParenL = 28H;
+  TokParenR = 29H; TokPlus = 2BH; TokSemic = 3BH; TokSlash = 2FH;
+  TokTilde = 7EH; TokEq = 3DH; TokEqN = 23H; TokLss = 3CH; TokLEq = 3D3CH;
+  TokGtr = 3EH; TokGEq = 3D3EH;
+
+  ErrOutOfMemTypes = MinInt + 1;
+  ErrOutOfMemSymbols = MinInt + 2;
+  ErrOutOfRegs = MinInt + 2;
+
+  ErrUnexpEof = MinInt + 10;
+  ErrUnexpEofInComment = MinInt + 11;
+  ErrIdentTooLong = MinInt + 12;
+  ErrIntTooLong = MinInt + 13;
+  ErrPostfixH = MinInt + 14;
+  ErrIntOverflow = MinInt + 15;
+  ErrCharOverflow = MinInt + 16;
+
+  ErrIdentExp = MinInt + 20;
+  ErrIntExp = MinInt + 21;
+  ErrCharExp = MinInt + 22;
+  ErrBoolExp = MinInt + 23;
+  ErrFactorExp = MinInt + 24;
+  ErrConstExp = MinInt + 25;
+  ErrTypeExp = MinInt + 25;
+  ErrStmtExp = MinInt + 26;
+  ErrScalarExp = MinInt + 27;
+  ErrArrayExp = MinInt + 28;
+  ErrRecordExp = MinInt + 29;
+
+  ErrMultipleDef = MinInt + 30;
+  ErrIdentUndef = MinInt + 31;
+  ErrIncompTypes = MinInt + 32;
+  ErrDivZero = MinInt + 33;
+  ErrNotLValue = MinInt + 34;
+  ErrParamsTooMany = MinInt + 35;
+  ErrParamsTooFew = MinInt + 36;
+  ErrNameMismatch = MinInt + 37;
+  ErrBadIndex = MinInt + 38;
+
+  MaxTypes = 20; MaxSymbols = 550;
+  Marker = MaxSymbols - 1;
+
+  ClassScope = 1; ClassConst = 2; ClassType = 3; ClassVar = 4;
+  ClassProc = 5; ClassField = 6; ClassFunc = 7;
+
+  ModeReg = 10; ModeCond = 11;
+
+  FormBool = 1; FormChar = 2; FormInt = 3; FormArray = 8; FormRecord = 9;
+
+  RegGP = 11; (* global pointer *)
+  RegFP = 12; (* frame pointer *)
+  RegSP = 13; (* stack pointer *)
+  RegRT = 14; (* return register *)
+  RegPC = 15; (* program counter *)
+
+  OcMOV = 8; OcMVN = 9; OcCMP = 10; OcMOVI = 16; OcCMPI = 18; 
+  OcMUL = 11; OcDIV = 12; OcMOD = 13; OcADD = 14; OcSUB = 15;
+  OcMULI =19; OcADDI = 22; 
+  OcLDB = 24; OcLDW = 25; OcSTB = 26; OcSTW = 27; OcPOP = 28; OcPSH = 29;
+  OcSYS = 31; OcJUMP = 48; OcCALL = 49;
+  OcBEQ = 50; OcBNE = 51; OcBLS = 52; OcBGE = 53; OcBLE = 54; OcBGT = 55;
+
+
+TYPE
+
+  Keyword = ARRAY 12 OF CHAR;
+
+  Ident = RECORD
+    data : ARRAY MaxLenIdent OF CHAR;
+    len : INTEGER
+  END;
+
+  Source = RECORD
+    line : INTEGER;
+    pos : INTEGER;
+    char : INTEGER;
+    token : INTEGER;
+    ident : Ident;
+    value : INTEGER
+  END;
+
+  Type = RECORD
+    form : INTEGER;
+    size : INTEGER;
+    len : INTEGER;
+    value : INTEGER; (* array : base type, record : scope *)
+    link: INTEGER (* - owner symbol (allocated) or
+                     - next in free list (deallocated),
+                     - -1 = NIL *)
+  END;
+
+  Symbol = RECORD
+    name : Ident;
+    level : INTEGER;
+    class : INTEGER;
+    type : INTEGER;
+    scope : INTEGER; (* parent scope *)
+    value : INTEGER; (* const or address *)
+    value2 : INTEGER; (* - deref level for VAR params or
+                         - forward address for ClassProc *)
+    next: INTEGER (* - next in scope (allocated) or
+                     - free list (deallocated),
+                     - -1 = NIL *)
+  END;
+
+  Gen = RECORD
+    mode : INTEGER;
+    type : INTEGER;
+    size : INTEGER;
+    level : INTEGER;
+    reg : INTEGER;
+    addr1 : INTEGER;
+    addr2 : INTEGER;
+    cond : INTEGER;
+    expConst : BOOLEAN
+  END;
+
+
 VAR
 
   sysParam : INTEGER;
   code : ARRAY 10000 OF INTEGER;
+  keywordLens : ARRAY 10 OF INTEGER;
+  keywords : ARRAY NbrKeywords OF Keyword;
+  source : Source;
+  types : ARRAY MaxTypes OF Type;
+  freeTypes : INTEGER; (* first type of free type list *)
+  symbols : ARRAY MaxSymbols OF Symbol;
+  freeSymbols : INTEGER; (* first symbol of free symbol list *)
+  allocSymbol : INTEGER; (* last allocated symbol *)
+  topScope : INTEGER; (* top symbol of scope stack *)
+  level : INTEGER; (* level of nested procedures *)
+  boolType : INTEGER; charType : INTEGER; intType : INTEGER;
+  varsize : INTEGER;
+  regs : ARRAY RegGP OF BOOLEAN;
+  pc : INTEGER; (* program counter *)
+  entrypoint : INTEGER;
+
+
+(* print procedures *)
+
+
+PROCEDURE PrintChar(char : INTEGER);
+
+  BEGIN
+    sysParam := char; SYS(-3)
+  END PrintChar;
+
+
+PROCEDURE PrintChars(chars : INTEGER);
+
+  BEGIN
+    IF chars > 0 THEN
+      PrintChars(chars DIV 256);
+      PrintChar(chars MOD 256)
+    END
+  END PrintChars;
+
+
+PROCEDURE PrintInt(int : INTEGER);
+
+  VAR i : INTEGER; tmpBuf : ARRAY MaxLenInt + 1 OF CHAR;
+
+  BEGIN
+    i := 0;
+    IF int = MinInt THEN
+      (* -2147483648 *)
+      PrintChars(2D323134H);
+      PrintChars(37343833H);
+      PrintChars(363438H);
+      int := 0
+    ELSIF int < 0 THEN
+      PrintChar(2DH (*-*));
+      int := -int
+    ELSIF int = 0 THEN
+      tmpBuf[0] := 30X (*0*);
+      i := i + 1
+    END;
+    WHILE int # 0 DO
+      tmpBuf[i] := CHR(30H + int MOD 10);
+      i := i + 1;
+      int := int DIV 10
+    END;
+    WHILE i > 0 DO
+      i := i - 1;
+      PrintChar(ORD(tmpBuf[i]))
+    END
+  END PrintInt;
+
+
+PROCEDURE PrintKeyword(token : INTEGER);
+
+  VAR kwLen : INTEGER;
+
+
+  PROCEDURE print(VAR kw : Keyword; len : INTEGER);
+
+    VAR ix : INTEGER;
+
+    BEGIN
+      ix := 0;
+      WHILE ix < len DO
+        PrintChar(ORD(kw[ix]));
+        ix := ix + 1
+      END
+    END print;
+
+
+  BEGIN (* PrintKeyword *)
+    kwLen := 0;
+    WHILE keywordLens[kwLen] < token DO
+      kwLen := kwLen + 1
+    END;
+    print(keywords[token], kwLen)
+  END PrintKeyword;
+
+
+(* scanner *)
+
+
+PROCEDURE ScannerInitialize;
+
+
+  PROCEDURE enterKW(token : INTEGER; chars1 : INTEGER;
+                    chars2 : INTEGER; chars3 : INTEGER);
+
+
+    PROCEDURE enterChars(VAR kw : Keyword; ix : INTEGER; chars : INTEGER);
+
+      BEGIN
+        IF chars > 0 THEN
+          enterChars(kw, ix + 1, chars DIV 256);
+          kw[ix] := CHR(chars MOD 256)
+        END
+      END enterChars;
+
+
+    BEGIN (* enterKW *)
+      enterChars(keywords[token], 0, chars1);
+      enterChars(keywords[token], 4, chars2);
+      enterChars(keywords[token], 8, chars3)
+    END enterKW;
+
+
+  BEGIN (* ScannerInitialize *)
+    keywordLens[0] := 0;
+    keywordLens[1] := 0;
+    enterKW(TokDo, 4F44H, 0, 0);
+    enterKW(TokIf, 4649H, 0, 0);
+    enterKW(TokOf, 464FH, 0, 0);
+    enterKW(TokOr, 524FH, 0, 0);
+    keywordLens[2] := TokOr;
+    enterKW(TokDiv, 564944H, 0, 0);
+    enterKW(TokEnd, 444E45H, 0, 0);
+    enterKW(TokMod, 444F4DH, 0, 0);
+    enterKW(TokSys, 535953H, 0, 0);
+    enterKW(TokVar, 524156H, 0, 0);
+    keywordLens[3] := TokVar;
+    enterKW(TokElse, 45534C45H, 0, 0);
+    enterKW(TokThen, 4E454854H, 0, 0);
+    enterKW(TokTrue, 45555254H, 0, 0);
+    enterKW(TokType, 45505954H, 0, 0);
+    keywordLens[4] := TokType;
+    enterKW(TokArray, 41525241H, 59H, 0);
+    enterKW(TokBegin, 49474542H, 4EH, 0);
+    enterKW(TokConst, 534E4F43H, 54H, 0);
+    enterKW(TokElsif, 49534C45H, 46H, 0);
+    enterKW(TokFalse, 534C4146H, 45H, 0);
+    enterKW(TokWhile, 4C494857H, 45H, 0);
+    keywordLens[5] := TokWhile;
+    enterKW(TokModule, 55444F4DH, 454CH, 0);
+    enterKW(TokRecord, 4F434552H, 4452H, 0);
+    keywordLens[6] := TokRecord;
+    keywordLens[7] := TokRecord;
+    keywordLens[8] := TokRecord;
+    enterKW(TokProcedure, 434F5250H, 52554445H, 45H);
+    keywordLens[9] := TokProcedure;
+    source.line := 0; source.char := 0AH
+  END ScannerInitialize;
+
+
+PROCEDURE ScannerRaiseError(errorNr : INTEGER);
+
+  BEGIN
+    PrintChars(0A0AH);
+    PrintChars(45525220H);
+    PrintInt(source.line);
+    PrintChar(2FH);
+    PrintInt(source.pos);
+    PrintChars(3A20H);
+    IF errorNr < MinInt + 256 THEN
+      PrintInt(errorNr - MinInt)
+    ELSIF errorNr < NbrKeywords THEN
+      PrintKeyword(errorNr);
+      PrintChars(203FH)
+    ELSE
+      PrintChars(errorNr);
+      PrintChars(203FH)
+    END;
+    PrintChar(0AH);
+    sysParam := errorNr; SYS(-1)
+  END ScannerRaiseError;
+
+
+PROCEDURE ScannerReadChar;
+
+  BEGIN
+    IF source.char = 0AH THEN
+      source.line := source.line + 1;
+      source.pos := 1
+    ELSE
+      source.pos := source.pos + 1
+    END;
+    SYS(-2); source.char := sysParam;
+    IF source.char = -1 THEN
+      ScannerRaiseError(ErrUnexpEof)
+    END
+  END ScannerReadChar;
+
+
+PROCEDURE ScannerNext;
+
+
+  PROCEDURE comment;
+
+    VAR repeat : BOOLEAN;
+
+    BEGIN
+      ScannerReadChar;
+      repeat := TRUE;
+      WHILE repeat DO
+        IF source.char = 28H (* ( *) THEN
+          ScannerReadChar;
+          IF source.char = 2AH (* * *) THEN
+            comment
+          END
+        ELSIF source.char = 2AH (* * *) THEN
+          ScannerReadChar;
+          IF source.char = 29H (* ) *) THEN
+            repeat := FALSE;
+            ScannerReadChar
+          END
+        ELSE
+          ScannerReadChar
+        END
+      END
+    END comment;
+
+
+  PROCEDURE identifier;
+
+    VAR repeat : BOOLEAN; i : INTEGER; k : INTEGER;
+
+    BEGIN
+      source.ident.len := 0;
+      repeat := TRUE;
+      WHILE repeat DO
+        IF source.ident.len < MaxLenIdent THEN
+          source.ident.data[source.ident.len] := CHR(source.char);
+          source.ident.len := source.ident.len + 1;
+          ScannerReadChar;
+          repeat :=
+            (source.char >= 30H) & (source.char <= 39H) OR
+            (source.char >= 41H) & (source.char <= 5AH) OR
+            (source.char >= 61H) & (source.char <= 7AH)
+        ELSE
+          ScannerRaiseError(ErrIdentTooLong)
+        END
+      END;
+      source.token := TokIdent;
+      IF source.ident.len <= 9 (* biggest keyword PROCEDURE *) THEN
+        k := keywordLens[source.ident.len - 1] + 1;
+        WHILE k <= keywordLens[source.ident.len] DO
+          i := 0;
+          WHILE i < source.ident.len DO
+            IF source.ident.data[i] # keywords[k][i] THEN
+              i := MaxInt
+            ELSE
+              i := i + 1
+            END
+          END;
+          IF i = source.ident.len THEN
+            source.token := k;
+            k := MaxInt
+          ELSE
+            k := k + 1
+          END
+        END
+      END
+    END identifier;
+
+
+  PROCEDURE number;
+
+    VAR
+
+      buf : ARRAY MaxLenInt OF CHAR;
+      bufIx : INTEGER; bufIx2 : INTEGER;
+      hex : BOOLEAN; base : INTEGER;
+      n : INTEGER; c : CHAR;
+      max  : INTEGER; maxMod : INTEGER;
+
+    BEGIN
+      bufIx := 0;
+      hex := TRUE;
+      base := 10;
+      WHILE hex OR (source.char >= 30H) & (source.char <= 39H) DO
+        IF bufIx < MaxLenInt THEN
+          buf[bufIx] := CHR(source.char);
+          bufIx := bufIx + 1;
+          ScannerReadChar;
+          hex := (source.char >= 41H) & (source.char <= 46H);
+          IF hex THEN base := 16 END
+        ELSE
+          ScannerRaiseError(ErrIntTooLong)
+        END
+      END;
+      source.token := TokInt;
+      IF source.char = 48H THEN
+        base := 16;
+        ScannerReadChar
+      ELSIF source.char = 58H THEN
+        base := 16;
+        ScannerReadChar;
+        source.token := TokChar
+      ELSIF base = 16 THEN
+        ScannerRaiseError(ErrPostfixH)
+      END;
+      bufIx2 := 0;
+      source.value := 0;
+      max := MaxInt DIV base;
+      maxMod := MaxInt MOD base;
+      WHILE bufIx2 < bufIx DO
+        c := buf[bufIx2];
+        bufIx2 := bufIx2 + 1;
+        IF (c >= 41X) & (c <= 46X) THEN
+          n := 10 - 41H + ORD(c)
+        ELSE
+          n := - 30H + ORD(c)
+        END;
+        IF (source.value < max) OR (n <= maxMod) THEN
+          source.value := base * source.value + n
+        ELSE
+          ScannerRaiseError(ErrIntOverflow)
+        END
+      END;
+      IF (source.token = TokChar) & (source.value > 255) THEN
+        ScannerRaiseError(ErrCharOverflow)
+      END
+    END number;
+
+
+  BEGIN (* ScannerNext *)
+    source.token := 0;
+    WHILE source.token = 0 DO
+      IF source.char <= 20H THEN
+        ScannerReadChar
+      ELSIF source.char < 41H (* A *) THEN
+        IF source.char < 30H (* 0 *) THEN
+          IF source.char = 23H (* # *) THEN
+            source.token := TokEqN; ScannerReadChar
+          ELSIF source.char = 26H (* & *) THEN
+            source.token := TokAmper; ScannerReadChar
+          ELSIF source.char = 28H (* ( *) THEN
+            source.token := TokParenL; ScannerReadChar;
+            IF source.char = 2AH (* * *) THEN
+              comment; source.token := 0
+            END
+          ELSIF source.char = 29H (* ) *) THEN
+            source.token := TokParenR; ScannerReadChar
+          ELSIF source.char = 2AH (* * *) THEN
+            source.token := TokAsterisk; ScannerReadChar
+          ELSIF source.char = 2BH (* + *) THEN
+            source.token := TokPlus; ScannerReadChar
+          ELSIF source.char = 2CH (* , *) THEN
+            source.token := TokComma; ScannerReadChar
+          ELSIF source.char = 2DH (* - *) THEN
+            source.token := TokMinus; ScannerReadChar
+          ELSIF source.char = 2EH (* . *) THEN
+            source.token := TokDot; ScannerReadChar
+          ELSIF source.char = 2FH (* / *) THEN
+            source.token := TokSlash; ScannerReadChar
+          ELSE (* ! $ % ' *)
+            ScannerReadChar
+          END
+        ELSIF source.char < 3AH (* : *) THEN
+          number
+        ELSIF source.char = 3AH (* : *) THEN
+          source.token := TokColon; ScannerReadChar;
+          IF source.char = 3DH (* = *) THEN
+            source.token := TokAssign; ScannerReadChar
+          END
+        ELSIF source.char = 3BH (* ; *) THEN
+          source.token := TokSemic; ScannerReadChar
+        ELSIF source.char = 3CH (* < *) THEN
+          source.token := TokLss; ScannerReadChar;
+          IF source.char = 3DH (* = *) THEN
+            source.token := TokLEq; ScannerReadChar
+          END
+        ELSIF source.char = 3DH (* = *) THEN
+          source.token := TokEq; ScannerReadChar
+        ELSIF source.char = 3EH (* > *) THEN
+          source.token := TokGtr; ScannerReadChar;
+          IF source.char = 3DH (* = *) THEN
+            source.token := TokGEq; ScannerReadChar
+          END
+        ELSE (* ? @ *)
+          ScannerReadChar
+        END
+      ELSIF source.char < 5BH (* [ *) THEN
+        identifier
+      ELSIF source.char < 61H (* a *) THEN
+        IF source.char = 5BH (* [ *) THEN
+          source.token := TokBrackL; ScannerReadChar
+        ELSIF source.char = 5DH (* ] *) THEN
+          source.token := TokBrackR; ScannerReadChar
+        ELSE (* ^ _ ` *)
+          ScannerReadChar
+        END
+      ELSIF source.char < 7BH (* { *) THEN
+        identifier
+      ELSE
+        IF source.char = 7BH (* { *) THEN
+          source.token := TokBraceL; ScannerReadChar
+        ELSIF source.char = 7DH (* } *) THEN
+          source.token := TokBraceR; ScannerReadChar
+        ELSIF source.char = 7EH (* ~ *) THEN
+          source.token := TokTilde; ScannerReadChar
+        ELSE (* | >7E *)
+          ScannerReadChar
+        END
+      END
+    END
+  END ScannerNext;
+
+
+(* symbol tables *)
+
+
+PROCEDURE STableInitialize;
+
+  VAR i : INTEGER;
+
+  BEGIN
+    i := 0;
+    WHILE i < MaxTypes DO
+      types[i].form := 0;
+      types[i].size := 0;
+      types[i].len := 0;
+      types[i].value := -1;
+      types[i].link := i + 1;
+      i := i + 1
+    END;
+    types[i - 1].link := -1;
+    freeTypes := 0;
+    i := 0;
+    WHILE i < MaxSymbols DO
+      symbols[i].name.len := 0;
+      symbols[i].level := 0;
+      symbols[i].class := 0;
+      symbols[i].type := -1;
+      symbols[i].scope := -1;
+      symbols[i].value := 0;
+      symbols[i].value2 := 0;
+      symbols[i].next := i + 1;
+      i := i + 1
+    END;
+    symbols[Marker].next := -1;
+    freeSymbols := 0;
+    topScope := -1
+  END STableInitialize;
+
+
+PROCEDURE STableAllocType(VAR t : INTEGER; form : INTEGER;
+                          size: INTEGER; link : INTEGER);
+
+  BEGIN
+    IF freeTypes # -1 THEN
+      types[freeTypes].form := form;
+      types[freeTypes].size := size;
+      types[freeTypes].len := 0;
+      types[freeTypes].value := -1;
+      t := freeTypes;
+      (*LOG
+      PrintChars(59415420H); PrintInt(t); PrintChar(9);*)
+      freeTypes := types[t].link;
+      types[t].link := link
+    ELSE
+      ScannerRaiseError(ErrOutOfMemTypes)
+    END
+  END STableAllocType;
+
+
+PROCEDURE STableCompIdent(VAR eq : BOOLEAN;
+                          VAR i1 : Ident; VAR i2 : Ident);
+
+  VAR i : INTEGER;
+
+  BEGIN
+    IF i1.len # i2.len THEN
+      eq := FALSE
+    ELSE
+      i := 0; eq := TRUE;
+      WHILE i < i1.len DO
+        IF i1.data[i] = i2.data[i] THEN
+          i := i + 1
+        ELSE
+          i := i1.len;
+          eq := FALSE
+        END
+      END
+    END
+  END STableCompIdent;
+
+
+PROCEDURE STableCopyIdent(VAR trg : Ident; VAR src : Ident);
+
+  VAR i : INTEGER;
+
+  BEGIN
+    trg.len := src.len;
+    i := 0;
+    WHILE i < src.len DO
+      trg.data[i] := src.data[i];
+      i := i + 1
+    END
+  END STableCopyIdent;
+
+
+PROCEDURE STableAllocSymbol(class : INTEGER);
+
+  BEGIN
+    IF freeSymbols # Marker THEN
+      IF class = ClassScope THEN
+        symbols[freeSymbols].name.len := 0;
+        symbols[freeSymbols].scope := topScope
+      ELSE
+        STableCopyIdent(symbols[freeSymbols].name, symbols[Marker].name);
+        symbols[freeSymbols].scope := -1
+      END;
+      symbols[freeSymbols].level := level;
+      symbols[freeSymbols].class := class;
+      symbols[freeSymbols].type := -1;
+      symbols[freeSymbols].value := 0;
+      symbols[freeSymbols].value2 := 0;
+      allocSymbol := freeSymbols;
+      (*LOG
+      PrintChars(59415320H); PrintInt(allocSymbol); PrintChar(9);*)
+      freeSymbols := symbols[allocSymbol].next;
+      symbols[allocSymbol].next := Marker
+    ELSE
+      ScannerRaiseError(ErrOutOfMemSymbols)
+    END
+  END STableAllocSymbol;
+
+
+PROCEDURE STableFindSymbol(VAR y : INTEGER; scope : INTEGER);
+
+  VAR eq : BOOLEAN;
+
+  BEGIN
+    y := scope;
+    STableCompIdent(eq,
+      symbols[symbols[y].next].name, symbols[Marker].name);
+    WHILE ~eq DO
+      y := symbols[y].next;
+      STableCompIdent(eq,
+        symbols[symbols[y].next].name, symbols[Marker].name)
+    END
+  END STableFindSymbol;
+
+
+PROCEDURE STableDeallocScope(scope : INTEGER);
+
+  VAR y : INTEGER;
+
+
+  PROCEDURE symbol(VAR y : INTEGER);
+
+    VAR t : INTEGER;
+
+    PROCEDURE type(t : INTEGER);
+
+      BEGIN
+        IF types[t].form = FormArray THEN
+          IF types[types[t].value].link = -1 THEN
+            type(types[t].value)
+          END;
+          types[t].link := freeTypes;
+          (*LOG
+          PrintChars(59445420H); PrintInt(t); PrintChar(9);*)
+          freeTypes := t
+        ELSIF types[t].form = FormRecord THEN
+          STableDeallocScope(types[t].value);
+          types[t].link := freeTypes;
+          (*LOG
+          PrintChars(59445420H); PrintInt(t); PrintChar(9);*)
+          freeTypes := t
+        END
+      END type;
+
+
+    BEGIN (* symbol *)
+      (*LOG
+      PrintChars(59445320H); PrintInt(y); PrintChar(9);*)
+      IF symbols[y].class = ClassProc THEN
+        STableDeallocScope(symbols[y].scope)
+      END;
+      t := symbols[y].type;
+      IF (t >= 0) & ((types[t].link = y) OR (types[t].link = -1)) THEN
+        type(t)
+      END
+    END symbol;
+
+
+  BEGIN (* STableDeallocScope *)
+    y := scope;
+    symbol(y);
+    WHILE symbols[y].next # Marker DO
+      y := symbols[y].next;
+      symbol(y)
+    END;
+    symbols[y].next := freeSymbols;
+    freeSymbols := scope
+  END STableDeallocScope;
+
+
+PROCEDURE STableInitUniverse;
+
+  VAR y : INTEGER;
+
+
+  PROCEDURE enter(VAR y : INTEGER; len : INTEGER;
+                  chars1 : INTEGER; chars2 : INTEGER;
+                  class : INTEGER; value : INTEGER; type : INTEGER);
+
+
+    PROCEDURE enterChars(ix : INTEGER; chars : INTEGER);
+
+      BEGIN
+        IF chars > 0 THEN
+          enterChars(ix + 1, chars DIV 256);
+          symbols[Marker].name.data[ix] := CHR(chars MOD 256)
+        END
+      END enterChars;
+
+
+    BEGIN (* enter *)
+      enterChars(0, chars1); enterChars(4, chars2);
+      symbols[Marker].name.len := len;
+      STableAllocSymbol(class);
+      symbols[y].next := allocSymbol;
+      y := allocSymbol;
+      symbols[y].value := value;
+      symbols[y].type := type
+    END enter;
+
+
+  BEGIN (* STableInitUniverse *)
+    STableAllocType(boolType, FormBool, 1, -1);
+    STableAllocType(charType, FormChar, 1, -1);
+    STableAllocType(intType, FormInt, 4, -1);
+    y := topScope;
+    enter(y, 7, 4C4F4F42H, 4E4145H, ClassType, 0, boolType); (* BOOLEAN*)
+    enter(y, 4, 52414843H, 0, ClassType, 0, charType); (* CHAR *)
+    enter(y, 7, 45544E49H, 524547H, ClassType, 0, intType); (* INTEGER *)
+    enter(y, 3, 524843H, 0, ClassFunc, 1, charType); (* CHR *)
+    enter(y, 3, 44524FH, 0, ClassFunc, 2, intType)  (* ORD *)
+  END STableInitUniverse;
+
+
+(* generator *)
+
+
+PROCEDURE GenInitRegs;
+
+  VAR i : INTEGER;
+
+  BEGIN
+    i := 0;
+    WHILE i < RegGP DO
+      regs[i] := FALSE; i := i + 1
+    END
+  END GenInitRegs;
+
+
+PROCEDURE GenAllocReg(VAR r : INTEGER);
+
+  VAR r2 : INTEGER;
+
+  BEGIN
+    r := -1;
+    r2 := 0;
+    WHILE r2 < RegGP DO
+      IF regs[r2] THEN
+        r2 := r2 + 1
+      ELSE
+        r := r2;
+        regs[r] := TRUE;
+        r2 := RegGP
+      END
+    END;
+    IF r = -1 THEN
+      ScannerRaiseError(ErrOutOfRegs)
+    END
+  END GenAllocReg;
+
+
+PROCEDURE GenFreeReg(r : INTEGER);
+
+  BEGIN
+    IF r < RegGP THEN
+      regs[r] := FALSE
+    END
+  END GenFreeReg;
+
+
+PROCEDURE GenAlign(VAR size : INTEGER);
+
+  VAR i : INTEGER; j : INTEGER;
+
+  BEGIN
+    IF size < 0 THEN i := -4 ELSE i := 4 END;
+    j := size MOD i;
+    IF j # 0 THEN
+      size := size + (i - j)
+    END
+  END GenAlign;
+
+
+PROCEDURE GenEmit(instr : INTEGER);
+
+  BEGIN
+    code[pc] := instr; pc := pc + 1
+  END GenEmit;
+
+
+PROCEDURE GenEmitOc1(oc : INTEGER; c : INTEGER);
+
+  BEGIN
+    (*LOG
+    PrintChars(47454D20H);
+    PrintInt(oc); PrintChar(20H);
+    PrintInt(c); PrintChar(0AH);*)
+    GenEmit(oc + c * 64)
+  END GenEmitOc1;
+
+
+PROCEDURE GenEmitOc3(oc : INTEGER; a : INTEGER; b : INTEGER; c : INTEGER);
+
+  BEGIN
+    (*LOG
+    PrintChars(47454D20H);
+    PrintInt(oc); PrintChar(20H);
+    PrintInt(a); PrintChar(20H);
+    PrintInt(b); PrintChar(20H);
+    PrintInt(c); PrintChar(0AH);*)
+    IF (c >= -20000H) & (c < 20000H) THEN
+      GenEmit(oc + a * 64 + b * 1024 + c * 16384)
+    ELSE
+      GenEmit(oc + 16 + a * 64 + b * 1024);
+      GenEmit(c)
+    END
+  END GenEmitOc3;
+
+
+PROCEDURE GenFixLink(l : INTEGER);
+
+  VAR l2 : INTEGER;
+
+  BEGIN
+    WHILE l # 0 DO
+      l2 := code[l];
+      code[l] := l2 MOD 64 + 64 * (pc - l - 1);
+      l := l2 DIV 64
+    END
+  END GenFixLink;
+
+
+PROCEDURE GenMergeLinks(VAR l : INTEGER ; l2 : INTEGER);
+
+  VAR l3 : INTEGER; l4 : INTEGER; l5 : INTEGER; continue : BOOLEAN;
+
+  BEGIN
+    IF l2 # 0 THEN
+      l3 := l2;
+      continue := TRUE;
+      WHILE continue DO
+        code[l3] := l4;
+        l5 := l4 DIV 64;
+        IF l5 = 0 THEN
+          continue := FALSE
+        ELSE
+          l3 := l5
+        END
+      END;
+      code[l3] := l4 + 64 * l;
+      l := l2
+    END
+  END GenMergeLinks;
+
+
+PROCEDURE GenNegCond(VAR c : INTEGER);
+
+  BEGIN
+    IF c = TokEq THEN c := TokEqN
+    ELSIF c = TokEqN THEN c := TokEq
+    ELSIF c = TokLss THEN c := TokGEq
+    ELSIF c = TokGEq THEN c := TokLss
+    ELSIF c = TokLEq THEN c := TokGtr
+    ELSIF c = TokGtr THEN c := TokLEq
+    END
+  END GenNegCond;
+
+
+PROCEDURE GenEmitCondBR(cond : INTEGER; disp : INTEGER; negated : BOOLEAN);
+
+  VAR oc : INTEGER;
+
+  BEGIN
+    IF negated THEN GenNegCond(cond) END;
+    IF cond = TokEq THEN oc := OcBEQ
+    ELSIF cond = TokEqN THEN oc := OcBNE
+    ELSIF cond = TokLss THEN oc := OcBLS
+    ELSIF cond = TokGEq THEN oc := OcBGE
+    ELSIF cond = TokLEq THEN oc := OcBLE
+    ELSIF cond = TokGtr THEN oc := OcBGT
+    END;
+    GenEmitOc1(oc, disp)
+  END GenEmitCondBR;
+
+
+PROCEDURE GenBCall(l : INTEGER);
+
+  BEGIN
+    GenEmitOc1(OcCALL, -l - pc - 1)
+  END GenBCall;
+
+
+PROCEDURE GenFCall(VAR l : INTEGER);
+
+  BEGIN
+    GenEmitOc1(OcCALL, -l);
+    l := -(pc - 1)
+  END GenFCall;
+
+
+PROCEDURE GenBJump(l : INTEGER);
+
+  BEGIN
+    GenEmitOc1(OcJUMP, l - pc - 1)
+  END GenBJump;
+
+
+PROCEDURE GenFJump(VAR l : INTEGER);
+
+  BEGIN
+    GenEmitOc1(OcJUMP, l);
+    l := pc - 1
+  END GenFJump;
+
+
+PROCEDURE GenEnter(varsize : INTEGER);
+
+  BEGIN
+    GenEmitOc3(OcPSH, RegRT, RegSP, -4);
+    GenEmitOc3(OcPSH, RegFP, RegSP, -4);
+    GenEmitOc3(OcMOV, RegFP, 0, RegSP);
+    IF varsize # 0 THEN
+      GenEmitOc3(OcADDI, RegSP, RegSP, varsize)
+    END
+  END GenEnter;
+
+
+PROCEDURE GenReturn(parsize : INTEGER);
+
+  BEGIN
+    GenEmitOc3(OcMOV, RegSP, 0, RegFP);
+    GenEmitOc3(OcPOP, RegFP, RegSP, 4);
+    GenEmitOc3(OcPOP, RegPC, RegSP, 4 + parsize)
+  END GenReturn;
+
+
+PROCEDURE GenMake(VAR g : Gen; VAR y : Symbol);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    g.mode := y.class;
+    g.type := y.type;
+    g.size := types[y.type].size;
+    g.level := y.level;
+    g.addr1 := y.value;
+    g.addr2 := y.value2;
+    IF g.level = 0 THEN
+      g.reg := RegGP
+    ELSE
+      g.reg := RegFP
+    END;
+    (*LOG
+    PrintChars(474D4B20H);
+    PrintInt(g.mode); PrintChar(20H);
+    PrintInt(g.addr1); PrintChar(20H);
+    PrintInt(g.addr2); PrintChar(20H);
+    PrintInt(g.reg); PrintChar(0AH);*)
+    WHILE g.addr2 > 0 DO
+      GenAllocReg(r);
+      GenEmitOc3(OcLDW, r, g.reg, g.addr1);
+      GenFreeReg(g.reg);
+      g.reg := r;
+      g.addr1 := 0; (* --> GenParam *)
+      g.addr2 := g.addr2 - 1
+    END
+  END GenMake;
+
+
+PROCEDURE GenLoad(VAR g : Gen);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF g.mode # ModeReg THEN
+      (*LOG
+      PrintChars(474C4420H);
+      PrintInt(g.mode); PrintChar(0AH);*)
+      IF g.mode = ClassConst THEN
+        GenAllocReg(g.reg);
+        GenEmitOc3(OcMOVI, g.reg, 0, g.addr1)
+      ELSIF g.mode = ClassVar THEN
+        GenAllocReg(r);
+        IF g.size = 1 THEN
+          GenEmitOc3(OcLDB, r, g.reg, g.addr1)
+        ELSE
+          GenEmitOc3(OcLDW, r, g.reg, g.addr1)
+        END;
+        GenFreeReg(g.reg);
+        g.reg := r
+      ELSIF g.mode = ModeCond THEN
+        GenEmitCondBR(g.cond, 2, TRUE);
+        GenFreeReg(g.reg);
+        GenFixLink(g.addr2);
+        GenAllocReg(g.reg);
+        GenEmitOc3(OcMOVI, g.reg, 0, 1);
+        GenEmitOc1(OcJUMP, 1);
+        GenFixLink(g.addr1);
+        GenEmitOc3(OcMOVI, g.reg, 0, 0)
+      END;
+      g.mode := ModeReg
+    END
+  END GenLoad;
+
+
+PROCEDURE GenLoadCond(VAR g : Gen);
+
+  BEGIN
+    IF g.mode # ModeCond THEN
+      GenLoad(g);
+      GenEmitOc3(OcCMPI, g.reg, g.reg, 0);
+      g.mode := ModeCond;
+      g.addr1 := 0;
+      g.addr2 := 0;
+      g.cond := TokEqN
+    END
+  END GenLoadCond;
+
+
+PROCEDURE GenCondFJump(VAR g : Gen);
+
+  BEGIN
+    GenLoadCond(g);
+    GenEmitCondBR(g.cond, g.addr1, TRUE);
+    GenFreeReg(g.reg);
+    GenFixLink(g.addr2);
+    g.addr1 := pc - 1
+  END GenCondFJump;
+
+
+PROCEDURE GenStore(VAR g : Gen; VAR g2 : Gen);
+
+  BEGIN
+    (*LOG
+    PrintChars(47535420H);
+    PrintInt(g.reg); PrintChar(20H);
+    PrintInt(g.mode); PrintChar(0AH);*)
+    GenLoad(g2);
+    (*LOG
+    PrintChars(47535420H);
+    PrintInt(g2.reg); PrintChar(20H);
+    PrintInt(g2.mode); PrintChar(0AH);*)
+    IF g.size = 1 THEN
+      GenEmitOc3(OcSTB, g2.reg, g.reg, g.addr1)
+    ELSE
+      GenEmitOc3(OcSTW, g2.reg, g.reg, g.addr1)
+    END;
+    GenFreeReg(g2.reg);
+    GenFreeReg(g.reg)
+  END GenStore;
+
+
+PROCEDURE GenParam(VAR g : Gen; isRef : BOOLEAN);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF isRef THEN (* ref param *)
+      IF g.mode = ClassVar THEN
+        IF g.addr1 = 0 (* -->GenMake *) THEN
+          r := g.reg
+        ELSE
+          GenAllocReg(r);
+          GenEmitOc3(OcADDI, r, g.reg, g.addr1)
+        END;
+        GenEmitOc3(OcPSH, r, RegSP, -4);
+        GenFreeReg(r)
+      ELSE
+        ScannerRaiseError(ErrNotLValue)
+      END
+    ELSE (* value param *)
+      GenLoad(g);
+      GenEmitOc3(OcPSH, g.reg, RegSP, -4)
+    END;
+    GenFreeReg(g.reg)
+  END GenParam;
+
+
+PROCEDURE GenField(VAR g : Gen; VAR y : Symbol);
+
+  BEGIN
+    g.addr1 := g.addr1 + y.value
+  END GenField;
+
+
+PROCEDURE GenIndex(VAR g : Gen; VAR g2 : Gen);
+
+  VAR size : INTEGER;
+
+  BEGIN
+    size := types[types[g.type].value].size;
+    IF g2.mode = ClassConst THEN
+      IF (g2.addr1 >= 0) &
+         (g2.addr1 < types[g.type].len) THEN
+        g.addr1 := g.addr1 + g2.addr1 * size
+      ELSE
+        ScannerRaiseError(ErrBadIndex)
+      END
+    ELSE
+      GenLoad(g2);
+      IF size > 1 THEN
+        GenEmitOc3(OcMULI, g2.reg, g2.reg, size)
+      END;
+      GenEmitOc3(OcADD, g2.reg, g2.reg, g.reg);
+      GenFreeReg(g.reg);
+      g.reg := g2.reg
+    END
+  END GenIndex;
+
+
+PROCEDURE GenOp(op : INTEGER; VAR g : Gen; VAR g2 : Gen);
+
+  BEGIN
+    GenLoad(g);
+    IF g2.mode = ClassConst THEN
+      GenEmitOc3(op + 8, g.reg, g.reg, g2.addr1)
+    ELSE
+      GenLoad(g2);
+      GenEmitOc3(op, g.reg, g.reg, g2.reg);
+      GenFreeReg(g2.reg)
+    END
+  END GenOp;
+
+
+PROCEDURE GenOp1(VAR g : Gen; op : INTEGER);
+
+  VAR l : INTEGER;
+
+  BEGIN
+    IF op = TokMinus THEN
+      IF g.mode = ClassVar THEN
+        GenLoad(g)
+      END;
+      GenEmitOc3(OcMVN, g.reg, 0, g.reg)
+    ELSIF op = TokTilde THEN
+      IF g.mode = ClassConst THEN
+        IF g.addr1 = 1 THEN g.addr1 := 0 ELSE g.addr1 := 1 END
+      ELSE
+        GenLoadCond(g); GenNegCond(g.cond);
+        l := g.addr1; g.addr1 := g.addr2; g.addr2 := l
+      END
+    ELSIF op = TokAmper THEN
+      GenLoadCond(g);
+      GenEmitCondBR(g.cond, g.addr1, TRUE);
+      GenFreeReg(g.reg);
+      g.addr1 := pc - 1;
+      GenFixLink(g.addr2);
+      g.addr2 := 0
+    ELSIF op = TokOr THEN
+      GenLoadCond(g);
+      GenEmitCondBR(g.cond, g.addr2, FALSE);
+      GenFreeReg(g.reg);
+      g.addr2 := pc - 1;
+      GenFixLink(g.addr1);
+      g.addr1 := 0
+    END
+  END GenOp1;
+
+
+PROCEDURE GenOp2(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+  BEGIN
+    IF types[g.type].form = FormInt THEN
+      IF op = TokAsterisk THEN GenOp(OcMUL, g, g2)
+      ELSIF op = TokDiv THEN GenOp(OcDIV, g, g2)
+      ELSIF op = TokMod THEN GenOp(OcMOD, g, g2)
+      ELSIF op = TokPlus THEN GenOp(OcADD, g, g2)
+      ELSIF op = TokMinus THEN GenOp(OcSUB, g, g2)
+      END
+    ELSE (* FormBool *)
+      IF (g.mode = ClassConst) & (g2.mode = ClassConst) THEN
+        IF op = TokOr THEN
+          IF (g.addr1 = 1) OR (g2.addr1 = 1) THEN
+            g.addr1 := 1
+          ELSE
+            g.addr1 := 0
+          END
+        ELSE (* TokAmper *)
+          IF (g.addr1 = 1) & (g2.addr1 = 1) THEN
+            g.addr1 := 1
+          ELSE
+            g.addr1 := 0
+          END
+        END
+      ELSE
+        GenLoadCond(g2);
+        IF op = TokOr THEN
+          g.addr1 := g2.addr1;
+          GenMergeLinks(g.addr2, g2.addr2)
+        ELSE (* TokAmper *)
+          GenMergeLinks(g.addr1, g2.addr1);
+          g.addr2 := g2.addr2
+        END;
+        g.cond := g2.cond
+      END
+    END
+  END GenOp2;
+
+
+PROCEDURE GenRel(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+  BEGIN
+    GenOp(OcCMP, g, g2);
+    g.cond := op;
+    g.mode := ModeCond;
+    g.addr1 := 0;
+    g.addr2 := 0
+  END GenRel;
+
+
+PROCEDURE GenSys(call : INTEGER);
+
+  BEGIN
+    GenEmitOc3(OcSYS, 0, 0, call)
+  END GenSys;
+
+
+(* parser *)
+
+
+PROCEDURE parse;
+
+
+  PROCEDURE accept(token : INTEGER);
+
+    BEGIN
+      IF source.token # token THEN
+        IF token = TokIdent THEN
+          ScannerRaiseError(ErrIdentExp)
+        ELSIF token = TokInt THEN
+          ScannerRaiseError(ErrIntExp)
+        ELSIF token = TokChar THEN
+          ScannerRaiseError(ErrCharExp)
+        ELSE
+          ScannerRaiseError(token)
+        END
+      END
+    END accept;
+
+
+  PROCEDURE checkBool(VAR g : Gen);
+
+    BEGIN
+      IF types[g.type].form # FormBool THEN
+        ScannerRaiseError(ErrBoolExp)
+      END
+    END checkBool;
+
+
+  PROCEDURE checkChar(VAR g : Gen);
+
+    BEGIN
+      IF types[g.type].form # FormChar THEN
+        ScannerRaiseError(ErrCharExp)
+      END
+    END checkChar;
+
+
+  PROCEDURE checkInt(VAR g : Gen);
+
+    BEGIN
+      IF types[g.type].form # FormInt THEN
+        ScannerRaiseError(ErrIntExp)
+      END
+    END checkInt;
+
+
+  PROCEDURE identDef(VAR y : INTEGER; class : INTEGER);
+
+    BEGIN
+      accept(TokIdent);
+      STableCopyIdent(symbols[Marker].name, source.ident);
+      STableFindSymbol(y, topScope);
+      IF symbols[y].next = Marker THEN
+        STableAllocSymbol(class);
+        symbols[y].next := allocSymbol;
+        y := allocSymbol;
+        ScannerNext
+      ELSE
+        ScannerRaiseError(ErrMultipleDef)
+      END
+    END identDef;
+
+
+  PROCEDURE identUse(VAR y : INTEGER);
+
+    VAR scope : INTEGER;
+
+
+    PROCEDURE checkLevel(VAR y : Symbol);
+
+      BEGIN
+        IF (y.level # 0) &
+           (y.level # level) &
+           (y.class = ClassVar) THEN
+          ScannerRaiseError(ErrIdentUndef)
+        END
+      END checkLevel;
+
+
+    BEGIN (* identUse *)
+      STableCopyIdent(symbols[Marker].name, source.ident);
+      scope := topScope;
+      WHILE scope # -1 DO
+        STableFindSymbol(y, scope);
+        IF symbols[y].next # Marker THEN
+          scope := -1
+        ELSE
+          scope := symbols[scope].scope
+        END
+      END;
+      IF symbols[y].next # Marker THEN
+        y := symbols[y].next;
+        checkLevel(symbols[y])
+      ELSE
+        ScannerRaiseError(ErrIdentUndef)
+      END
+    END identUse;
+
+
+  PROCEDURE expr(VAR g : Gen);
+
+    VAR op : INTEGER; g2 : Gen;
+
+
+    PROCEDURE Op1(VAR g : Gen; op : INTEGER);
+
+      BEGIN
+        IF op = TokMinus THEN
+          IF g.mode = ClassConst THEN
+            IF g.addr1 # MinInt THEN
+              g.addr1 := -g.addr1
+            ELSE
+              ScannerRaiseError(ErrIntOverflow)
+            END
+          ELSE
+            GenOp1(g, op)
+          END
+        END
+      END Op1;
+
+
+    PROCEDURE Op2(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+
+      PROCEDURE mul(VAR g : Gen; VAR g2 : Gen);
+
+        VAR isNeg : BOOLEAN; i : INTEGER;
+
+        BEGIN
+          IF (g.addr1 = 0) OR (g2.addr1 = 0) THEN
+            g.addr1 := 0
+          ELSE
+            IF (g.addr1 > 0) & (g2.addr1 < 0) OR
+               (g.addr1 < 0) & (g2.addr1 > 0) THEN
+              isNeg := TRUE;
+              i := MinInt
+            ELSE
+              isNeg := FALSE;
+              i := MaxInt
+            END;
+            i := i DIV g2.addr1;
+            IF (g.addr1 < 0) & (i > g.addr1) OR
+               (g.addr1 > 0) & (i < g.addr1) THEN
+              ScannerRaiseError(ErrIntOverflow)
+            ELSE
+              g.addr1 := g.addr1 * g2.addr1
+            END
+          END
+        END mul;
+
+
+      PROCEDURE div(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF g2.addr1 = 0 THEN
+            ScannerRaiseError(ErrDivZero)
+          ELSE
+            g.addr1 := g.addr1 DIV g2.addr1
+          END
+        END div;
+
+
+      PROCEDURE mod(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF g2.addr1 = 0 THEN
+            ScannerRaiseError(ErrDivZero)
+          ELSE
+            g.addr1 := g.addr1 MOD g2.addr1
+          END
+        END mod;
+
+
+      PROCEDURE add(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF MaxInt - g2.addr1 < g.addr1 THEN
+            ScannerRaiseError(ErrIntOverflow)
+          ELSE
+            g.addr1 := g.addr1 + g2.addr1
+          END
+        END add;
+
+
+      PROCEDURE sub(VAR g : Gen; VAR g2 : Gen);
+
+        BEGIN
+          IF MinInt + g2.addr1 > g.addr1 THEN
+            ScannerRaiseError(ErrIntOverflow)
+          ELSE
+            g.addr1 := g.addr1 - g2.addr1
+          END
+        END sub;
+
+
+      BEGIN (* Op2 *)
+        IF types[g.type].form = FormInt THEN
+          IF (g.mode = ClassConst) & (g2.mode = ClassConst) THEN
+            IF op = TokAsterisk THEN mul(g, g2)
+            ELSIF op = TokDiv THEN div(g, g2)
+            ELSIF op = TokMod THEN mod(g, g2)
+            ELSIF op = TokPlus THEN add(g, g2)
+            ELSIF op = TokMinus THEN sub(g, g2)
+            END
+          ELSE
+            GenOp2(g, g2, op)
+          END
+        ELSE
+          GenOp2(g, g2, op)
+        END
+      END Op2;
+
+
+    PROCEDURE simpleExpr(VAR g : Gen);
+
+      VAR op : INTEGER; g2 : Gen;
+
+
+      PROCEDURE term(VAR g : Gen);
+
+        VAR op : INTEGER; g2 : Gen;
+
+
+        PROCEDURE factor(VAR g : Gen);
+
+          VAR y : INTEGER;
+
+
+          PROCEDURE selector(VAR g : Gen);
+
+            VAR g2 : Gen; y : INTEGER;
+
+            BEGIN
+              WHILE (source.token = TokBrackL) OR
+                    (source.token = TokDot) DO
+                IF source.token = TokBrackL THEN
+                  IF types[g.type].form = FormArray THEN
+                    ScannerNext;
+                    g2.expConst := FALSE;
+                    expr(g2);
+                    checkInt(g2);
+                    GenIndex(g, g2);
+                    accept(TokBrackR);
+                    g.type := types[g.type].value;
+                    g.size := types[g.type].size
+                  ELSE
+                    ScannerRaiseError(ErrArrayExp)
+                  END
+                ELSE
+                  IF types[g.type].form = FormRecord THEN
+                    ScannerNext;
+                    accept(TokIdent);
+                    STableCopyIdent(symbols[Marker].name, source.ident);
+                    STableFindSymbol(y, types[g.type].value);
+                    y := symbols[y].next;
+                    IF y > 0 THEN
+                      g.type := symbols[y].type;
+                      g.size := types[symbols[y].type].size;
+                      GenField(g, symbols[y])
+                    ELSE
+                      ScannerRaiseError(ErrIdentUndef)
+                    END
+                  ELSE
+                    ScannerRaiseError(ErrRecordExp)
+                  END
+                END;
+                ScannerNext
+              END
+            END selector;
+
+
+          PROCEDURE stdFunc(VAR g : Gen; VAR y : Symbol);
+
+            BEGIN
+              ScannerNext;
+              accept(TokParenL);
+              ScannerNext;
+              g.expConst := FALSE;
+              expr(g);
+              IF y.value = 1 (* CHR *) THEN
+                checkInt(g);
+                g.type := charType
+              ELSIF y.value = 2 (* ORD *) THEN
+                checkChar(g);
+                g.type := intType
+              END;
+              accept(TokParenR);
+              ScannerNext
+            END stdFunc;
+
+
+          BEGIN (* factor *)
+            IF source.token = TokChar THEN
+              g.mode := ClassConst;
+              g.type := charType;
+              g.addr1 := source.value;
+              ScannerNext
+            ELSIF source.token = TokInt THEN
+              g.mode := ClassConst;
+              g.type := intType;
+              g.addr1 := source.value;
+              ScannerNext
+            ELSIF source.token = TokFalse THEN
+              g.mode := ClassConst;
+              g.type := boolType;
+              g.addr1 := 0;
+              ScannerNext
+            ELSIF source.token = TokTrue THEN
+              g.mode := ClassConst;
+              g.type := boolType;
+              g.addr1 := 1;
+              ScannerNext
+            ELSIF source.token = TokIdent THEN
+              identUse(y);
+              IF symbols[y].class = ClassFunc THEN
+                stdFunc(g, symbols[y])
+              ELSE
+                GenMake(g, symbols[y]);
+                ScannerNext;
+                selector(g)
+              END
+            ELSIF source.token = TokParenL THEN
+              ScannerNext;
+              expr(g);
+              accept(TokParenR);
+              ScannerNext
+            ELSIF source.token = TokTilde THEN
+              ScannerNext;
+              factor(g);
+              checkBool(g);
+              GenOp1(g, TokTilde)
+            ELSE
+              ScannerRaiseError(ErrFactorExp)
+            END
+          END factor;
+
+
+        BEGIN (* term *)
+          factor(g);
+          WHILE (source.token = TokAsterisk) OR
+                (source.token = TokDiv) OR
+                (source.token = TokMod) OR
+                (source.token = TokAmper) DO
+            op := source.token;
+            IF op # TokAmper THEN
+              checkInt(g)
+            ELSE
+              checkBool(g);
+              GenOp1(g, op)
+            END;
+            ScannerNext;
+            g2.expConst := FALSE;
+            factor(g2);
+            IF g.type = g2.type THEN
+              Op2(g, g2, op)
+            ELSE
+              ScannerRaiseError(ErrIncompTypes)
+            END
+          END
+        END term;
+
+
+      BEGIN (* simpleExpr *)
+        IF source.token = TokPlus THEN
+          ScannerNext;
+          term(g);
+          checkInt(g)
+        ELSIF source.token = TokMinus THEN
+          ScannerNext;
+          term(g);
+          checkInt(g);
+          Op1(g, TokMinus)
+        ELSE
+          term(g)
+        END;
+        WHILE (source.token = TokPlus) OR
+              (source.token = TokMinus) OR
+              (source.token = TokOr) DO
+          op := source.token;
+          IF op # TokOr THEN
+            checkInt(g)
+          ELSE
+            checkBool(g);
+            GenOp1(g, op)
+          END;
+          ScannerNext;
+          g2.expConst := FALSE;
+          term(g2);
+          IF g.type = g2.type THEN
+            Op2(g, g2, op)
+          ELSE
+            ScannerRaiseError(ErrIncompTypes)
+          END
+        END
+      END simpleExpr;
+
+
+    BEGIN (* expr *)
+      simpleExpr(g);
+      IF (source.token = TokEq) OR (source.token = TokEqN) OR
+         (source.token = TokLss) OR (source.token = TokLEq) OR
+         (source.token = TokGtr) OR (source.token = TokGEq) THEN
+        IF ~g.expConst THEN
+          op := source.token;
+          ScannerNext;
+          g2.expConst := FALSE;
+          simpleExpr(g2);
+          IF g.type = g2.type THEN
+            GenRel(g, g2, op);
+            g.type := boolType;
+            g.size := types[boolType].size
+          ELSE
+            ScannerRaiseError(ErrIncompTypes)
+          END
+        ELSE
+          ScannerRaiseError(ErrConstExp)
+        END
+      END
+    END expr;
+
+
+  PROCEDURE constExpr(VAR i : INTEGER);
+
+    VAR g : Gen;
+
+    BEGIN
+      g.expConst := TRUE;
+      expr(g);
+      i := g.addr1
+    END constExpr;
+
+
+  PROCEDURE typeDef(VAR y : INTEGER; VAR t : INTEGER; class : INTEGER);
+
+    VAR link : INTEGER; y2 : INTEGER;
+
+
+    PROCEDURE array(VAR t : INTEGER; link : INTEGER);
+
+      VAR y : INTEGER;
+
+      BEGIN
+        ScannerNext;
+        STableAllocType(t, FormArray, 0, link);
+        constExpr(types[t].len);
+        accept(TokOf);
+        ScannerNext;
+        typeDef(y, types[t].value, 0);
+        types[t].size := types[t].len * types[types[t].value].size
+      END array;
+
+
+    PROCEDURE record(VAR t : INTEGER; link : INTEGER);
+
+      VAR addr : INTEGER;
+
+
+      PROCEDURE field(VAR t : INTEGER; VAR addr : INTEGER);
+
+        VAR y : INTEGER;
+
+        BEGIN
+          typeDef(y, t, ClassField);
+          symbols[y].value := addr;
+          addr := addr + types[t].size;
+          GenAlign(addr)
+        END field;
+
+
+      BEGIN (* record *)
+        addr := 0;
+        STableAllocSymbol(ClassScope);
+        topScope := allocSymbol;
+        ScannerNext;
+        field(t, addr);
+        WHILE source.token = TokSemic DO
+          ScannerNext;
+          field(t, addr)
+        END;
+        accept(TokEnd);
+        STableAllocType(t, FormRecord, 0, link);
+        types[t].size := addr;
+        types[t].value := topScope;
+        topScope := symbols[topScope].scope;
+        ScannerNext
+      END record;
+
+
+    BEGIN (* typeDef *)
+      link := -1;
+      IF class # 0 THEN
+        identDef(y, class);
+        IF class = ClassType THEN
+          link := y;
+          accept(TokEq)
+        ELSE
+          accept(TokColon)
+        END;
+        ScannerNext
+      END;
+      IF source.token = TokIdent THEN
+        identUse(y2);
+        IF (class # 0) & (y = y2) THEN
+          ScannerRaiseError(ErrIdentUndef)
+        END;
+        t := symbols[y2].type;
+        ScannerNext
+      ELSIF source.token = TokArray THEN
+        array(t, link)
+      ELSIF source.token = TokRecord THEN
+        record(t, link)
+      ELSE
+        ScannerRaiseError(ErrTypeExp)
+      END;
+      IF class # 0 THEN
+        symbols[y].type := t
+      END
+    END typeDef;
+
+
+  PROCEDURE stmts;
+
+
+    PROCEDURE stmt;
+
+      VAR y : INTEGER;
+
+
+      PROCEDURE sys;
+
+        VAR call : INTEGER;
+
+        BEGIN
+          ScannerNext;
+          accept(TokParenL);
+          ScannerNext;
+          constExpr(call);
+          accept(TokParenR);
+          GenSys(call);
+          ScannerNext
+        END sys;
+
+
+      PROCEDURE assign;
+
+        VAR g : Gen; g2 : Gen;
+
+        BEGIN
+          expr(g);
+          IF g.mode = ClassVar THEN
+            accept(TokAssign);
+            ScannerNext;
+            g2.expConst := FALSE;
+            expr(g2);
+            IF g.type = g2.type THEN
+              GenStore(g, g2)
+            ELSE
+              ScannerRaiseError(ErrIncompTypes)
+            END
+          ELSE
+            ScannerRaiseError(ErrNotLValue)
+          END
+        END assign;
+
+
+      PROCEDURE call(VAR proc : Symbol);
+
+        VAR y : INTEGER;
+
+
+        PROCEDURE param(VAR y : INTEGER);
+
+          VAR g : Gen;
+
+          BEGIN
+            g.expConst := FALSE;
+            expr(g);
+            IF (y # Marker) & (symbols[y].value > 0) THEN
+              IF symbols[y].type = g.type THEN
+                GenParam(g, symbols[y].value2 = 1)
+              ELSE
+                ScannerRaiseError(ErrIncompTypes)
+              END
+            ELSE
+              ScannerRaiseError(ErrParamsTooMany)
+            END;
+            y := symbols[y].next
+          END param;
+
+
+        BEGIN (* call *)
+          y := symbols[proc.scope].next;
+          ScannerNext;
+          IF source.token = TokParenL THEN
+            ScannerNext;
+            param(y);
+            WHILE source.token = TokComma DO
+              ScannerNext;
+              param(y)
+            END;
+            accept(TokParenR);
+            ScannerNext
+          END;
+          IF (y = Marker) OR (symbols[y].value < 0) THEN
+            IF proc.value = MinInt THEN (* forward call *)
+              GenFCall(proc.value2)
+            ELSE (* backward call *)
+              GenBCall(proc.value)
+            END
+          ELSE
+            ScannerRaiseError(ErrParamsTooFew)
+          END
+        END call;
+
+
+      PROCEDURE if;
+
+        VAR g : Gen; l : INTEGER;
+
+        BEGIN
+          ScannerNext;
+          g.expConst := FALSE;
+          expr(g);
+          checkBool(g);
+          GenCondFJump(g);
+          accept(TokThen);
+          ScannerNext;
+          stmts;
+          l := 0;
+          WHILE source.token = TokElsif DO
+            GenFJump(l);
+            GenFixLink(g.addr1);
+            ScannerNext;
+            expr(g);
+            checkBool(g);
+            GenCondFJump(g);
+            accept(TokThen);
+            ScannerNext;
+            stmts
+          END;
+          IF source.token = TokElse THEN
+            GenFJump(l);
+            GenFixLink(g.addr1);
+            ScannerNext;
+            stmts
+          ELSE
+            GenFixLink(g.addr1)
+          END;
+          GenFixLink(l);
+          accept(TokEnd);
+          ScannerNext
+        END if;
+
+
+      PROCEDURE while;
+
+        VAR g : Gen; l : INTEGER;
+
+        BEGIN
+          ScannerNext;
+          l := pc;
+          g.expConst := FALSE;
+          expr(g);
+          checkBool(g);
+          GenCondFJump(g);
+          accept(TokDo);
+          ScannerNext;
+          stmts;
+          GenBJump(l);
+          GenFixLink(g.addr1);
+          accept(TokEnd);
+          ScannerNext
+        END while;
+
+
+      BEGIN (* stmt *)
+        IF source.token = TokIdent THEN
+          identUse(y);
+          IF symbols[y].class = ClassProc THEN
+            call(symbols[y])
+          ELSE
+            assign
+          END
+        ELSIF source.token = TokSys THEN
+          sys
+        ELSIF source.token = TokIf THEN
+          if
+        ELSIF source.token = TokWhile THEN
+          while
+        ELSE
+          ScannerRaiseError(ErrStmtExp)
+        END
+      END stmt;
+
+
+    BEGIN (* stmts *)
+      stmt;
+      WHILE source.token = TokSemic DO
+        ScannerNext;
+        stmt
+      END
+    END stmts;
+
+
+  PROCEDURE decls(VAR addr : INTEGER);
+
+
+    PROCEDURE const;
+
+      VAR y : INTEGER;
+
+      BEGIN
+        WHILE source.token = TokIdent DO
+          identDef(y, ClassConst);
+          accept(TokEq);
+          ScannerNext;
+          constExpr(symbols[y].value);
+          (*LOG
+          PrintChars(50303020H); PrintInt(symbols[y].value); PrintChar(9);*)
+          symbols[y].type := intType;
+          accept(TokSemic);
+          ScannerNext
+        END
+      END const;
+
+
+    PROCEDURE type;
+
+      VAR y : INTEGER; t : INTEGER;
+
+      BEGIN
+        WHILE source.token = TokIdent DO
+          typeDef(y, t, ClassType);
+          accept(TokSemic);
+          ScannerNext
+        END
+      END type;
+
+
+    PROCEDURE var(VAR addr : INTEGER);
+
+      VAR y : INTEGER; t : INTEGER; size : INTEGER;
+
+      BEGIN
+        WHILE source.token = TokIdent DO
+          typeDef(y, t, ClassVar);
+          size := types[t].size;
+          GenAlign(size);
+          addr := addr - size;
+          symbols[y].value := addr;
+          accept(TokSemic);
+          ScannerNext
+        END
+      END var;
+
+
+    PROCEDURE proc;
+
+      VAR
+
+        y : INTEGER; parsize : INTEGER; varsize : INTEGER;
+        lastParam : INTEGER; eq : BOOLEAN;
+
+
+      PROCEDURE params(VAR addr : INTEGER);
+
+        VAR y : INTEGER; t : INTEGER; offs : INTEGER;
+
+        BEGIN
+          IF source.token = TokVar THEN
+            ScannerNext;
+            typeDef(y, t, ClassVar);
+            symbols[y].value2 := 1
+          ELSE
+            typeDef(y, t, ClassVar);
+            symbols[y].value2 := 0
+          END;
+          IF symbols[y].value2 = 0 THEN
+            IF types[t].form >= FormArray THEN
+              ScannerRaiseError(ErrScalarExp)
+            END
+          END;
+          addr := addr + 4; offs := addr;
+          IF source.token = TokSemic THEN
+            ScannerNext;
+            params(addr)
+          END;
+          symbols[y].value := addr - offs + 8
+        END params;
+
+
+      BEGIN (* proc *)
+        identDef(y, ClassProc);
+        symbols[y].value := MinInt (* forward call marker *);
+        symbols[y].value2 := 0;
+        level := level + 1;
+        STableAllocSymbol(ClassScope);
+        topScope := allocSymbol;
+        symbols[y].scope := allocSymbol;
+        parsize := 0;
+        IF source.token = TokParenL THEN
+          ScannerNext;
+          IF source.token # TokParenR THEN
+            params(parsize);
+            accept(TokParenR);
+            ScannerNext
+          END
+        END;
+        accept(TokSemic);
+        ScannerNext;
+        lastParam := allocSymbol;
+        varsize := 0;
+        decls(varsize);
+        IF symbols[y].value = MinInt THEN
+          GenFixLink(-symbols[y].value2)
+        END;
+        symbols[y].value := -pc;
+        GenEnter(varsize);
+        accept(TokBegin);
+        ScannerNext;
+        stmts;
+        accept(TokEnd);
+        ScannerNext;
+        accept(TokIdent);
+        STableCompIdent(eq, symbols[y].name, source.ident);
+        IF eq THEN
+          ScannerNext;
+          accept(TokSemic);
+          ScannerNext
+        ELSE
+          ScannerRaiseError(ErrNameMismatch)
+        END;
+        IF symbols[lastParam].next # Marker THEN
+          STableDeallocScope(symbols[lastParam].next);
+          symbols[lastParam].next := Marker
+        END;
+        GenReturn(parsize);
+        topScope := symbols[topScope].scope;
+        level := level - 1
+      END proc;
+
+
+    BEGIN (* decls *)
+      IF source.token = TokConst THEN
+        ScannerNext;
+        const
+      END;
+      IF source.token = TokType THEN
+        ScannerNext;
+        type
+      END;
+      IF source.token = TokVar THEN
+        ScannerNext;
+        var(addr)
+      END;
+      WHILE source.token = TokProcedure DO
+        ScannerNext;
+        proc
+      END
+    END decls;
+
+
+  BEGIN (* parse *)
+    ScannerNext; accept(TokModule);
+    ScannerNext; accept(TokIdent);
+    ScannerNext; accept(TokSemic);
+    ScannerNext;
+    STableAllocSymbol(ClassScope);
+    topScope := allocSymbol;
+    varsize := 0;
+    decls(varsize);
+    entrypoint := pc;
+    IF source.token = TokBegin THEN
+      ScannerNext; stmts
+    END;
+    STableDeallocScope(topScope);
+    topScope := symbols[topScope].scope;
+    accept(TokEnd);
+    ScannerNext; accept(TokIdent);
+    ScannerNext; accept(TokDot)
+  END parse;
+
 
 BEGIN
-  code[0] := 26101969H;
-  code[1] := 26111956H;
-  code[2] := -1;
+  ScannerInitialize; ScannerReadChar; STableInitialize;
+  STableAllocSymbol(ClassScope); topScope := allocSymbol;
+  STableInitUniverse;
+  level := 0; GenInitRegs; pc := 0; 
+  parse;
+  STableDeallocScope(topScope) (* universe *);
+  GenEmitOc3(OcPOP, RegPC, RegSP, 0);
+  GenEmit(varsize);
+  GenEmit(entrypoint * 4); (* entry point offset *)
+  GenEmit(-1); (* end marker *)
   sysParam := -40004; SYS(-4)
 END NPC0.

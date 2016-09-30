@@ -113,7 +113,7 @@ static void create_single_memory_model(FILE *file)
 	GP = (int)(m + static_memory_size);
 	SP = GP + variable_memory_size;
 	PC = GP + entry_point_offset;
-	printf("memory-model: single\n");
+	/*printf("memory-model: single\n");
 	printf("total memory size (MB): %i\n", total_memory_size / MB);
 	printf("start address memory: %p\n", m);
 	printf("static memory size (MB): %i\n", static_memory_size / MB);
@@ -123,7 +123,7 @@ static void create_single_memory_model(FILE *file)
 	printf("entry point offset: %i\n", entry_point_offset);
 	printf("GP: %08x\n", GP);
 	printf("SP: %08x\n", SP);
-	printf("PC: %08x\n", PC);
+	printf("PC: %08x\n", PC);*/
 }
 
 /* sys calls */
@@ -199,6 +199,8 @@ static void sys(int nr, int *res, int par)
 		*((int*)(GP - 4)) = getchar();
 		break;
 	case -1:
+		exit(*((int*)(GP - 4)));
+		break;
 	case 0:
 		exit(((struct STACK_1*)par)->p0);
 		break;
@@ -234,8 +236,8 @@ static void run(void)
 	SP -= WORD_SIZE; *((int*)SP) = 0;
 	while (PC) {
 		int ir = *((int*)PC);
-		fprintf(stderr, "PC:%08x(%04x) ir:%08x oc:%i ",
-			PC, (PC - GP), ir, ir & BIT_OC_MASK);
+		/*fprintf(stdout, "PC:%08x(%04x) ir:%08x oc:%i ",
+			PC, (PC - GP), ir, ir & BIT_OC_MASK);*/
 		PC += WORD_SIZE;
 		int oc = ir & 0x3f;
 		int a, b, c;
@@ -252,7 +254,7 @@ static void run(void)
 		} else {
 			c = ir >> BIT_OC;
 		}
-		fprintf(stderr, "a:%i b:%i c:%i\n", a, b, c);
+		/*fprintf(stdout, "a:%i b:%i c:%i\n", a, b, c);*/
 		switch (ir & BIT_OC_MASK) {
 		case OC_MOV: case OC_MOVI: case OC_MOVI2:
 			r[a] = c << b;
