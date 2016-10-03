@@ -3,6 +3,8 @@ MODULE NPC00;
 
 CONST
 
+  SizeBufferData = 512;
+
   MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
   MaxLenInt = 11; MaxLenIdent = 32;
 
@@ -23,7 +25,8 @@ CONST
 
   ErrOutOfMemTypes = MinInt + 1;
   ErrOutOfMemSymbols = MinInt + 2;
-  ErrOutOfRegs = MinInt + 2;
+  ErrOutOfRegs = MinInt + 3;
+  ErrOpenFile = MinInt + 4;
 
   ErrUnexpEof = MinInt + 10;
   ErrUnexpEofInComment = MinInt + 11;
@@ -81,6 +84,13 @@ CONST
 
 TYPE
 
+  BufferData = ARRAY SizeBufferData OF CHAR;
+
+  Buffer = RECORD
+    pos : INTEGER;
+    data : BufferData
+  END;
+
   Keyword = ARRAY 12 OF CHAR;
 
   Ident = RECORD
@@ -89,6 +99,10 @@ TYPE
   END;
 
   Source = RECORD
+    file : INTEGER;
+    buf : BufferData;
+    bufPos : INTEGER;
+    bufLimit : INTEGER;
     line : INTEGER;
     pos : INTEGER;
     char : INTEGER;
@@ -136,7 +150,6 @@ TYPE
 
 VAR
 
-  sysParam : INTEGER;
   code : ARRAY 10000 OF INTEGER;
   keywordLens : ARRAY 10 OF INTEGER;
   keywords : ARRAY NbrKeywords OF Keyword;
@@ -155,27 +168,128 @@ VAR
   entrypoint : INTEGER;
 
 
-(* print procedures *)
+(* sys calls *)
 
 
-PROCEDURE PrintChar(char : INTEGER);
+PROCEDURE SysExit(exitNr : INTEGER);
+
+  VAR x : INTEGER;
 
   BEGIN
-    sysParam := char; SYS(-3)
-  END PrintChar;
+    SYS(0, x, ADDR(exitNr))
+  END SysExit;
 
 
-PROCEDURE PrintChars(chars : INTEGER);
+PROCEDURE SysGetInfo(VAR info : INTEGER; infoIx : INTEGER);
+
+  BEGIN
+    SYS(1, info, ADDR(infoIx))
+  END SysGetInfo;
+
+
+PROCEDURE SysGetArg(VAR arg : INTEGER; argIx : INTEGER);
+
+  BEGIN
+    SYS(2, arg, ADDR(argIx))
+  END SysGetArg;
+
+
+PROCEDURE SysOpenFile(VAR file : INTEGER; filename : INTEGER;
+                      mode : INTEGER);
+
+  BEGIN
+    SYS(11, file, ADDR(mode))
+  END SysOpenFile;
+
+
+PROCEDURE SysCloseFile(file : INTEGER);
+
+  VAR x : INTEGER;
+
+  BEGIN
+    SYS(12, x, ADDR(file))
+  END SysCloseFile;
+
+
+PROCEDURE SysReadFile(VAR n : INTEGER; file : INTEGER;
+                      addr : INTEGER; len : INTEGER);
+
+  BEGIN
+    SYS(13, n, ADDR(len))
+  END SysReadFile;
+
+
+PROCEDURE SysWriteFile(VAR n : INTEGER; file : INTEGER;
+                       addr : INTEGER; len : INTEGER);
+
+  BEGIN
+    SYS(14, n, ADDR(len))
+  END SysWriteFile;
+
+
+(* buffer procedures *)
+
+
+PROCEDURE BufReset(VAR buf : Buffer);
+
+  BEGIN
+    buf.pos := 0
+  END BufReset;
+
+
+PROCEDURE BufFlush(VAR buf : Buffer; file : INTEGER);
+
+  VAR n : INTEGER;
+
+  BEGIN
+    SysWriteFile(n, file, ADDR(buf.data), buf.pos);
+    BufReset(buf)
+  END BufFlush;
+
+
+PROCEDURE BufFlush2StdOut(VAR buf : Buffer);
+
+  CONST StdOut = 4;
+
+  VAR file : INTEGER;
+
+  BEGIN
+    SysGetInfo(file, StdOut);
+    BufFlush(buf, file)
+  END BufFlush2StdOut;
+
+
+PROCEDURE BufFlush2StdErr(VAR buf : Buffer);
+
+  CONST StdErr = 5;
+
+  VAR file : INTEGER;
+
+  BEGIN
+    SysGetInfo(file, StdErr);
+    BufFlush(buf, file)
+  END BufFlush2StdErr;
+
+
+PROCEDURE BufPutChar(VAR buf : Buffer; char : CHAR);
+
+  BEGIN
+    buf.data[buf.pos] := char;
+    buf.pos := buf.pos + 1
+  END BufPutChar;
+
+
+PROCEDURE BufPutChars(VAR buf : Buffer; chars : INTEGER);
 
   BEGIN
     IF chars > 0 THEN
-      PrintChars(chars DIV 256);
-      PrintChar(chars MOD 256)
+      BufPutChars(buf, chars DIV 256);
+      BufPutChar(buf, CHR(chars MOD 256))
     END
-  END PrintChars;
+  END BufPutChars;
 
 
-PROCEDURE PrintInt(int : INTEGER);
+PROCEDURE BufPutInt(VAR buf : Buffer; int : INTEGER);
 
   VAR i : INTEGER; tmpBuf : ARRAY MaxLenInt + 1 OF CHAR;
 
@@ -183,12 +297,12 @@ PROCEDURE PrintInt(int : INTEGER);
     i := 0;
     IF int = MinInt THEN
       (* -2147483648 *)
-      PrintChars(2D323134H);
-      PrintChars(37343833H);
-      PrintChars(363438H);
+      BufPutChars(buf, 2D323134H);
+      BufPutChars(buf, 37343833H);
+      BufPutChars(buf, 363438H);
       int := 0
     ELSIF int < 0 THEN
-      PrintChar(2DH (*-*));
+      BufPutChar(buf, 2DX (*-*));
       int := -int
     ELSIF int = 0 THEN
       tmpBuf[0] := 30X (*0*);
@@ -201,39 +315,89 @@ PROCEDURE PrintInt(int : INTEGER);
     END;
     WHILE i > 0 DO
       i := i - 1;
-      PrintChar(ORD(tmpBuf[i]))
+      BufPutChar(buf, tmpBuf[i])
     END
-  END PrintInt;
+  END BufPutInt;
 
 
-PROCEDURE PrintKeyword(token : INTEGER);
+PROCEDURE BufPutKeyword(VAR buf : Buffer; token : INTEGER);
 
   VAR kwLen : INTEGER;
 
 
-  PROCEDURE print(VAR kw : Keyword; len : INTEGER);
+  PROCEDURE put(VAR buf : Buffer; VAR kw : Keyword; len : INTEGER);
 
     VAR ix : INTEGER;
 
     BEGIN
       ix := 0;
       WHILE ix < len DO
-        PrintChar(ORD(kw[ix]));
+        BufPutChar(buf, kw[ix]);
         ix := ix + 1
       END
-    END print;
+    END put;
 
 
-  BEGIN (* PrintKeyword *)
+  BEGIN (* BufPutKeyword *)
     kwLen := 0;
     WHILE keywordLens[kwLen] < token DO
       kwLen := kwLen + 1
     END;
-    print(keywords[token], kwLen)
-  END PrintKeyword;
+    put(buf, keywords[token], kwLen)
+  END BufPutKeyword;
 
 
 (* scanner *)
+
+
+PROCEDURE ScannerRaiseError(errorNr : INTEGER);
+
+  VAR console : Buffer;
+
+  BEGIN
+    BufReset(console);
+    BufPutChars(console, 0A0AH);
+    BufPutChars(console, 45525220H);
+    BufPutInt(console, source.line);
+    BufPutChar(console, 2FX);
+    BufPutInt(console, source.pos);
+    BufPutChars(console, 3A20H);
+    IF errorNr < MinInt + 256 THEN
+      BufPutInt(console, errorNr - MinInt)
+    ELSIF errorNr < NbrKeywords THEN
+      BufPutKeyword(console, errorNr);
+      BufPutChars(console, 203FH)
+    ELSE
+      BufPutChars(console, errorNr);
+      BufPutChars(console, 203FH)
+    END;
+    BufPutChar(console, 0AX);
+    BufFlush2StdErr(console);
+    SysExit(errorNr)
+  END ScannerRaiseError;
+
+
+PROCEDURE ScannerReadChar;
+
+  BEGIN
+    IF source.char = 0AH THEN
+      source.line := source.line + 1;
+      source.pos := 1
+    ELSE
+      source.pos := source.pos + 1
+    END;
+    IF source.bufPos = source.bufLimit THEN
+      SysReadFile(source.bufLimit, source.file,
+        ADDR(source.buf), SizeBufferData);
+      source.bufPos := 0
+    END;
+    IF source.bufPos < source.bufLimit THEN
+      source.char := ORD(source.buf[source.bufPos]);
+      source.bufPos := source.bufPos + 1
+    ELSE
+      ScannerRaiseError(ErrUnexpEof)
+    END
+  END ScannerReadChar;
 
 
 PROCEDURE ScannerInitialize;
@@ -258,6 +422,27 @@ PROCEDURE ScannerInitialize;
       enterChars(keywords[token], 4, chars2);
       enterChars(keywords[token], 8, chars3)
     END enterKW;
+
+
+  PROCEDURE OpenSource;
+
+    CONST FileOpenModeRead = 1;
+
+    VAR filename : INTEGER;
+
+    BEGIN
+      SysGetArg(filename, 0);
+      SysOpenFile(source.file, filename, FileOpenModeRead);
+      IF source.file # 0 THEN
+        source.bufLimit := SizeBufferData;
+        source.bufPos := source.bufLimit;
+        source.char := 0AH;
+        source.line := 0;
+        ScannerReadChar
+      ELSE
+        ScannerRaiseError(ErrOpenFile)
+      END
+    END OpenSource;
 
 
   BEGIN (* ScannerInitialize *)
@@ -293,47 +478,8 @@ PROCEDURE ScannerInitialize;
     keywordLens[8] := TokRecord;
     enterKW(TokProcedure, 434F5250H, 52554445H, 45H);
     keywordLens[9] := TokProcedure;
-    source.line := 0; source.char := 0AH
+    OpenSource
   END ScannerInitialize;
-
-
-PROCEDURE ScannerRaiseError(errorNr : INTEGER);
-
-  BEGIN
-    PrintChars(0A0AH);
-    PrintChars(45525220H);
-    PrintInt(source.line);
-    PrintChar(2FH);
-    PrintInt(source.pos);
-    PrintChars(3A20H);
-    IF errorNr < MinInt + 256 THEN
-      PrintInt(errorNr - MinInt)
-    ELSIF errorNr < NbrKeywords THEN
-      PrintKeyword(errorNr);
-      PrintChars(203FH)
-    ELSE
-      PrintChars(errorNr);
-      PrintChars(203FH)
-    END;
-    PrintChar(0AH);
-    sysParam := errorNr; SYS(-1)
-  END ScannerRaiseError;
-
-
-PROCEDURE ScannerReadChar;
-
-  BEGIN
-    IF source.char = 0AH THEN
-      source.line := source.line + 1;
-      source.pos := 1
-    ELSE
-      source.pos := source.pos + 1
-    END;
-    SYS(-2); source.char := sysParam;
-    IF source.char = -1 THEN
-      ScannerRaiseError(ErrUnexpEof)
-    END
-  END ScannerReadChar;
 
 
 PROCEDURE ScannerNext;
@@ -599,8 +745,6 @@ PROCEDURE STableAllocType(VAR t : INTEGER; form : INTEGER;
       types[freeTypes].len := 0;
       types[freeTypes].value := -1;
       t := freeTypes;
-      (*LOG
-      PrintChars(59415420H); PrintInt(t); PrintChar(9);*)
       freeTypes := types[t].link;
       types[t].link := link
     ELSE
@@ -662,8 +806,6 @@ PROCEDURE STableAllocSymbol(class : INTEGER);
       symbols[freeSymbols].value := 0;
       symbols[freeSymbols].value2 := 0;
       allocSymbol := freeSymbols;
-      (*LOG
-      PrintChars(59415320H); PrintInt(allocSymbol); PrintChar(9);*)
       freeSymbols := symbols[allocSymbol].next;
       symbols[allocSymbol].next := Marker
     ELSE
@@ -705,22 +847,16 @@ PROCEDURE STableDeallocScope(scope : INTEGER);
             type(types[t].value)
           END;
           types[t].link := freeTypes;
-          (*LOG
-          PrintChars(59445420H); PrintInt(t); PrintChar(9);*)
           freeTypes := t
         ELSIF types[t].form = FormRecord THEN
           STableDeallocScope(types[t].value);
           types[t].link := freeTypes;
-          (*LOG
-          PrintChars(59445420H); PrintInt(t); PrintChar(9);*)
           freeTypes := t
         END
       END type;
 
 
     BEGIN (* symbol *)
-      (*LOG
-      PrintChars(59445320H); PrintInt(y); PrintChar(9);*)
       IF symbols[y].class = ClassProc THEN
         STableDeallocScope(symbols[y].scope)
       END;
@@ -782,8 +918,9 @@ PROCEDURE STableInitUniverse;
     enter(y, 7, 4C4F4F42H, 4E4145H, ClassType, 0, boolType); (* BOOLEAN*)
     enter(y, 4, 52414843H, 0, ClassType, 0, charType); (* CHAR *)
     enter(y, 7, 45544E49H, 524547H, ClassType, 0, intType); (* INTEGER *)
-    enter(y, 3, 524843H, 0, ClassFunc, 1, charType); (* CHR *)
-    enter(y, 3, 44524FH, 0, ClassFunc, 2, intType)  (* ORD *)
+    enter(y, 4, 52444441H, 0, ClassFunc, 1, intType); (* ADDR *)
+    enter(y, 3, 524843H, 0, ClassFunc, 2, charType); (* CHR *)
+    enter(y, 3, 44524FH, 0, ClassFunc, 3, intType)  (* ORD *)
   END STableInitUniverse;
 
 
@@ -856,10 +993,6 @@ PROCEDURE GenEmit(instr : INTEGER);
 PROCEDURE GenEmitOc1(oc : INTEGER; c : INTEGER);
 
   BEGIN
-    (*LOG
-    PrintChars(47454D20H);
-    PrintInt(oc); PrintChar(20H);
-    PrintInt(c); PrintChar(0AH);*)
     GenEmit(oc + c * 64)
   END GenEmitOc1;
 
@@ -867,12 +1000,6 @@ PROCEDURE GenEmitOc1(oc : INTEGER; c : INTEGER);
 PROCEDURE GenEmitOc3(oc : INTEGER; a : INTEGER; b : INTEGER; c : INTEGER);
 
   BEGIN
-    (*LOG
-    PrintChars(47454D20H);
-    PrintInt(oc); PrintChar(20H);
-    PrintInt(a); PrintChar(20H);
-    PrintInt(b); PrintChar(20H);
-    PrintInt(c); PrintChar(0AH);*)
     IF (c >= -20000H) & (c < 20000H) THEN
       GenEmit(oc + a * 64 + b * 1024 + c * 16384)
     ELSE
@@ -1015,12 +1142,6 @@ PROCEDURE GenMake(VAR g : Gen; VAR y : Symbol);
     ELSE
       g.reg := RegFP
     END;
-    (*LOG
-    PrintChars(474D4B20H);
-    PrintInt(g.mode); PrintChar(20H);
-    PrintInt(g.addr1); PrintChar(20H);
-    PrintInt(g.addr2); PrintChar(20H);
-    PrintInt(g.reg); PrintChar(0AH);*)
     WHILE g.addr2 > 0 DO
       GenAllocReg(r);
       GenEmitOc3(OcLDW, r, g.reg, g.addr1);
@@ -1038,9 +1159,6 @@ PROCEDURE GenLoad(VAR g : Gen);
 
   BEGIN
     IF g.mode # ModeReg THEN
-      (*LOG
-      PrintChars(474C4420H);
-      PrintInt(g.mode); PrintChar(0AH);*)
       IF g.mode = ClassConst THEN
         GenAllocReg(g.reg);
         GenEmitOc3(OcMOVI, g.reg, 0, g.addr1)
@@ -1096,15 +1214,7 @@ PROCEDURE GenCondFJump(VAR g : Gen);
 PROCEDURE GenStore(VAR g : Gen; VAR g2 : Gen);
 
   BEGIN
-    (*LOG
-    PrintChars(47535420H);
-    PrintInt(g.reg); PrintChar(20H);
-    PrintInt(g.mode); PrintChar(0AH);*)
     GenLoad(g2);
-    (*LOG
-    PrintChars(47535420H);
-    PrintInt(g2.reg); PrintChar(20H);
-    PrintInt(g2.mode); PrintChar(0AH);*)
     IF g.size = 1 THEN
       GenEmitOc3(OcSTB, g2.reg, g.reg, g.addr1)
     ELSE
@@ -1273,11 +1383,51 @@ PROCEDURE GenRel(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
   END GenRel;
 
 
-PROCEDURE GenSys(call : INTEGER);
+PROCEDURE GenSys(call : INTEGER; VAR g : Gen; VAR g2 : Gen);
+
+  VAR r : INTEGER;
 
   BEGIN
-    GenEmitOc3(OcSYS, 0, 0, call)
+    GenLoad(g2);
+    GenAllocReg(r);
+    GenEmitOc3(OcSYS, r, g2.reg, call);
+    GenEmitOc3(OcSTW, r, g.reg, g.addr1);
+    GenFreeReg(r);
+    GenFreeReg(g.reg);
+    GenFreeReg(g2.reg)
   END GenSys;
+
+
+PROCEDURE GenAddr(VAR g : Gen);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF g.mode = ClassVar THEN
+      IF g.addr1 # 0 (* -->GenMake *) THEN
+        GenAllocReg(r);
+        GenEmitOc3(OcADDI, r, g.reg, g.addr1);
+        g.reg := r
+      END;
+      g.mode := ModeReg
+    ELSE
+      ScannerRaiseError(ErrNotLValue)
+    END
+  END GenAddr;
+
+
+PROCEDURE GenCreateFile;
+
+  CONST FileOpenModeWrite = 2;
+
+  VAR filename : INTEGER; file : INTEGER; n : INTEGER;
+
+  BEGIN
+    SysGetArg(filename, 1);
+    SysOpenFile(file, filename, FileOpenModeWrite);
+    SysWriteFile(n, file, ADDR(code), pc * 4);
+    SysCloseFile(file)
+  END GenCreateFile;
 
 
 (* parser *)
@@ -1563,10 +1713,13 @@ PROCEDURE parse;
               ScannerNext;
               g.expConst := FALSE;
               expr(g);
-              IF y.value = 1 (* CHR *) THEN
+              IF y.value = 1 (* ADDR *) THEN
+                GenAddr(g);
+                g.type := intType
+              ELSIF y.value = 2 (* CHR *) THEN
                 checkInt(g);
                 g.type := charType
-              ELSIF y.value = 2 (* ORD *) THEN
+              ELSIF y.value = 3 (* ORD *) THEN
                 checkChar(g);
                 g.type := intType
               END;
@@ -1814,16 +1967,30 @@ PROCEDURE parse;
 
       PROCEDURE sys;
 
-        VAR call : INTEGER;
+        VAR call : INTEGER; g : Gen; g2 : Gen;
 
         BEGIN
           ScannerNext;
           accept(TokParenL);
           ScannerNext;
           constExpr(call);
-          accept(TokParenR);
-          GenSys(call);
-          ScannerNext
+          accept(TokComma);
+          ScannerNext;
+          g.expConst := FALSE;
+          expr(g);
+          checkInt(g);
+          IF g.mode = ClassVar THEN
+            accept(TokComma);
+            ScannerNext;
+            g2.expConst := FALSE;
+            expr(g2);
+            checkInt(g2);
+            GenSys(call, g, g2);
+            accept(TokParenR);
+            ScannerNext
+          ELSE
+            ScannerRaiseError(ErrNotLValue)
+          END
         END sys;
 
 
@@ -2001,8 +2168,6 @@ PROCEDURE parse;
           accept(TokEq);
           ScannerNext;
           constExpr(symbols[y].value);
-          (*LOG
-          PrintChars(50303020H); PrintInt(symbols[y].value); PrintChar(9);*)
           symbols[y].type := intType;
           accept(TokSemic);
           ScannerNext
@@ -2168,7 +2333,7 @@ PROCEDURE parse;
 
 
 BEGIN
-  ScannerInitialize; ScannerReadChar; STableInitialize;
+  ScannerInitialize; STableInitialize;
   STableAllocSymbol(ClassScope); topScope := allocSymbol;
   STableInitUniverse;
   level := 0; GenInitRegs; pc := 0; 
@@ -2176,7 +2341,6 @@ BEGIN
   STableDeallocScope(topScope) (* universe *);
   GenEmitOc3(OcPOP, RegPC, RegSP, 0);
   GenEmit(varsize);
-  GenEmit(entrypoint * 4); (* entry point offset *)
-  GenEmit(-1); (* end marker *)
-  sysParam := -40004; SYS(-4)
+  GenEmit(entrypoint * 4);
+  GenCreateFile
 END NPC00.

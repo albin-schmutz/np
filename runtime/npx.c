@@ -53,26 +53,6 @@ static char *alloc_memory(int size)
 	return m;
 }
 
-static void dump_regs(void)
-{
-	int i;
-	fprintf(stderr, "<dump_regs>\n");
-	for (i = 0; i < NBR_REGS; ++i) {
-		fprintf(stderr, "%02i: %08x  ", i, r[i]);
-		if (i % 4 == 3) fprintf(stderr, "\n");
-	}
-}
-
-static void write_file(int par)
-{
-	int *mem = (int*)(GP + par);
-	FILE *f = fopen("out", "wb");
-	int i = 0;
-	while (mem[i] != -1) i++;
-	fwrite(mem, 1, i * 4, f);
-	fclose(f);
-}
-
 /*
  *
  * single memory model
@@ -186,21 +166,6 @@ static void sys_write_file(int *res, struct STACK_3 *f)
 static void sys(int nr, int *res, int par)
 {
 	switch (nr) {
-	case -5:
-		dump_regs();
-		break;
-	case -4:
-		write_file(*((int*)(GP - 4)));
-		break;
-	case -3:
-		putchar(*((int*)(GP - 4)));
-		break;
-	case -2:
-		*((int*)(GP - 4)) = getchar();
-		break;
-	case -1:
-		exit(*((int*)(GP - 4)));
-		break;
 	case 0:
 		exit(((struct STACK_1*)par)->p0);
 		break;
