@@ -1,4 +1,4 @@
-MODULE NPC00;
+MODULE NPC00b;
 
 
 CONST
@@ -782,8 +782,9 @@ PROCEDURE STableInitUniverse;
     enter(y, 7, 4C4F4F42H, 4E4145H, ClassType, 0, boolType); (* BOOLEAN*)
     enter(y, 4, 52414843H, 0, ClassType, 0, charType); (* CHAR *)
     enter(y, 7, 45544E49H, 524547H, ClassType, 0, intType); (* INTEGER *)
-    enter(y, 3, 524843H, 0, ClassFunc, 1, charType); (* CHR *)
-    enter(y, 3, 44524FH, 0, ClassFunc, 2, intType)  (* ORD *)
+    enter(y, 4, 52444441H, 0, ClassFunc, 1, intType); (* ADDR *)
+    enter(y, 3, 524843H, 0, ClassFunc, 2, charType); (* CHR *)
+    enter(y, 3, 44524FH, 0, ClassFunc, 3, intType)  (* ORD *)
   END STableInitUniverse;
 
 
@@ -1026,7 +1027,7 @@ PROCEDURE GenMake(VAR g : Gen; VAR y : Symbol);
       GenEmitOc3(OcLDW, r, g.reg, g.addr1);
       GenFreeReg(g.reg);
       g.reg := r;
-      g.addr1 := 0; (* --> GenParam *)
+      g.addr1 := 0; (* --> GenAddr, GenParam *)
       g.addr2 := g.addr2 - 1
     END
   END GenMake;
@@ -1273,11 +1274,37 @@ PROCEDURE GenRel(VAR g : Gen; VAR g2 : Gen; op : INTEGER);
   END GenRel;
 
 
-PROCEDURE GenSys(call : INTEGER);
+PROCEDURE GenSys(call : INTEGER; VAR g : Gen; VAR g2 : Gen);
+
+  VAR r : INTEGER;
 
   BEGIN
-    GenEmitOc3(OcSYS, 0, 0, call)
+    GenLoad(g2);
+    GenAllocReg(r);
+    GenEmitOc3(OcSYS, r, g2.reg, call);
+    GenEmitOc3(OcSTW, r, g.reg, g.addr1);
+    GenFreeReg(r);
+    GenFreeReg(g.reg);
+    GenFreeReg(g2.reg)
   END GenSys;
+
+
+PROCEDURE GenAddr(VAR g : Gen);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF g.mode = ClassVar THEN
+      IF g.addr1 # 0 (* -->GenMake *) THEN
+        GenAllocReg(r);
+        GenEmitOc3(OcADDI, r, g.reg, g.addr1);
+        g.reg := r
+      END;
+      g.mode := ModeReg
+    ELSE
+      ScannerRaiseError(ErrNotLValue)
+    END
+  END GenAddr;
 
 
 (* parser *)
@@ -1563,10 +1590,13 @@ PROCEDURE parse;
               ScannerNext;
               g.expConst := FALSE;
               expr(g);
-              IF y.value = 1 (* CHR *) THEN
+              IF y.value = 1 (* ADDR *) THEN
+                GenAddr(g);
+                g.type := intType
+              ELSIF y.value = 2 (* CHR *) THEN
                 checkInt(g);
                 g.type := charType
-              ELSIF y.value = 2 (* ORD *) THEN
+              ELSIF y.value = 3 (* ORD *) THEN
                 checkChar(g);
                 g.type := intType
               END;
@@ -1814,16 +1844,30 @@ PROCEDURE parse;
 
       PROCEDURE sys;
 
-        VAR call : INTEGER;
+        VAR call : INTEGER; g : Gen; g2 : Gen;
 
         BEGIN
           ScannerNext;
           accept(TokParenL);
           ScannerNext;
           constExpr(call);
-          accept(TokParenR);
-          GenSys(call);
-          ScannerNext
+          accept(TokComma);
+          ScannerNext;
+          g.expConst := FALSE;
+          expr(g);
+          checkInt(g);
+          IF g.mode = ClassVar THEN
+            accept(TokComma);
+            ScannerNext;
+            g2.expConst := FALSE;
+            expr(g2);
+            checkInt(g2);
+            GenSys(call, g, g2);
+            accept(TokParenR);
+            ScannerNext
+          ELSE
+            ScannerRaiseError(ErrNotLValue)
+          END
         END sys;
 
 
@@ -2179,4 +2223,4 @@ BEGIN
   GenEmit(entrypoint * 4); (* entry point offset *)
   GenEmit(-1); (* end marker *)
   sysParam := -40004; SYS(-4)
-END NPC00.
+END NPC00b.
