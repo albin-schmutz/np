@@ -1208,6 +1208,7 @@ PROCEDURE GenLoadCond(VAR g : Gen);
     IF g.mode # ModeCond THEN
       GenLoad(g);
       GenEmitOc3(OcCMPI, g.reg, g.reg, 0);
+      GenFreeReg(g.reg); GenCheckRegs;
       g.mode := ModeCond;
       g.addr1 := 0;
       g.addr2 := 0;
@@ -1708,7 +1709,7 @@ PROCEDURE parse;
                     STableCopyIdent(symbols[Marker].name, source.ident);
                     STableFindSymbol(y, types[g.type].value);
                     y := symbols[y].next;
-                    IF y > 0 THEN
+                    IF y # Marker THEN
                       g.type := symbols[y].type;
                       g.size := types[symbols[y].type].size;
                       GenField(g, symbols[y])
