@@ -1,0 +1,112 @@
+MODULE Buf;
+
+IMPORT Sys;
+
+
+CONST
+
+  SizeBufferData* = 512;
+  MaxLenInt* = 11;
+
+
+TYPE
+
+  BufferData* = ARRAY SizeBufferData OF CHAR;
+
+  Buffer* = RECORD
+    pos : INTEGER;
+    data : BufferData
+  END;
+
+
+PROCEDURE Reset*(VAR buf : Buffer);
+
+  BEGIN
+    buf.pos := 0
+  END Reset;
+
+
+PROCEDURE Flush*(VAR buf : Buffer; file : INTEGER);
+
+  VAR n : INTEGER;
+
+  BEGIN
+    Sys.WriteFile(n, file, ADDR(buf.data), buf.pos);
+    Reset(buf)
+  END Flush;
+
+
+PROCEDURE Flush2StdOut*(VAR buf : Buffer);
+
+  CONST StdOut = 4;
+
+  VAR file : INTEGER;
+
+  BEGIN
+    Sys.GetInfo(file, StdOut);
+    Flush(buf, file)
+  END Flush2StdOut;
+
+
+PROCEDURE Flush2StdErr*(VAR buf : Buffer);
+
+  CONST StdErr = 5;
+
+  VAR file : INTEGER;
+
+  BEGIN
+    Sys.GetInfo(file, StdErr);
+    Flush(buf, file)
+  END Flush2StdErr;
+
+
+PROCEDURE PutChar*(VAR buf : Buffer; char : CHAR);
+
+  BEGIN
+    buf.data[buf.pos] := char;
+    buf.pos := buf.pos + 1
+  END PutChar;
+
+
+PROCEDURE PutChars*(VAR buf : Buffer; chars : INTEGER);
+
+  BEGIN
+    IF chars > 0 THEN
+      PutChars(buf, chars DIV 256);
+      PutChar(buf, CHR(chars MOD 256))
+    END
+  END PutChars;
+
+
+PROCEDURE PutInt*(VAR buf : Buffer; int : INTEGER);
+
+  VAR i : INTEGER; tmpBuf : ARRAY MaxLenInt + 1 OF CHAR;
+
+  BEGIN
+    i := 0;
+    IF int = Sys.MinInt THEN
+      (* -2147483648 *)
+      PutChars(buf, 2D323134H);
+      PutChars(buf, 37343833H);
+      PutChars(buf, 363438H);
+      int := 0
+    ELSIF int < 0 THEN
+      PutChar(buf, 2DX (*-*));
+      int := -int
+    ELSIF int = 0 THEN
+      tmpBuf[0] := 30X (*0*);
+      i := i + 1
+    END;
+    WHILE int # 0 DO
+      tmpBuf[i] := CHR(30H + int MOD 10);
+      i := i + 1;
+      int := int DIV 10
+    END;
+    WHILE i > 0 DO
+      i := i - 1;
+      PutChar(buf, tmpBuf[i])
+    END
+  END PutInt;
+
+
+END Buf.

@@ -1,12 +1,11 @@
-MODULE NPC00b;
+MODULE NPC01;
+
+IMPORT Sys, Buf;
 
 
 CONST
 
-  SizeBufferData = 512;
-
-  MaxInt = 7FFFFFFFH; MinInt = -MaxInt - 1;
-  MaxLenInt = 11; MaxLenIdent = 32;
+  MaxLenIdent = 32;
 
   TokIdent = -1; TokInt = -2; TokChar = -3;
 
@@ -23,43 +22,43 @@ CONST
   TokTilde = 7EH; TokEq = 3DH; TokEqN = 23H; TokLss = 3CH; TokLEq = 3D3CH;
   TokGtr = 3EH; TokGEq = 3D3EH;
 
-  ErrOutOfMemTypes = MinInt + 1;
-  ErrOutOfMemSymbols = MinInt + 2;
-  ErrOutOfRegs = MinInt + 3;
-  ErrCheckRegs = MinInt + 4;
-  ErrOpenFile = MinInt + 5;
+  ErrOutOfMemTypes = Sys.MinInt + 1;
+  ErrOutOfMemSymbols = Sys.MinInt + 2;
+  ErrOutOfRegs = Sys.MinInt + 3;
+  ErrCheckRegs = Sys.MinInt + 4;
+  ErrOpenFile = Sys.MinInt + 5;
 
-  ErrUnexpEof = MinInt + 10;
-  ErrUnexpEofInComment = MinInt + 11;
-  ErrIdentTooLong = MinInt + 12;
-  ErrIntTooLong = MinInt + 13;
-  ErrPostfixH = MinInt + 14;
-  ErrIntOverflow = MinInt + 15;
-  ErrCharOverflow = MinInt + 16;
+  ErrUnexpEof = Sys.MinInt + 10;
+  ErrUnexpEofInComment = Sys.MinInt + 11;
+  ErrIdentTooLong = Sys.MinInt + 12;
+  ErrIntTooLong = Sys.MinInt + 13;
+  ErrPostfixH = Sys.MinInt + 14;
+  ErrIntOverflow = Sys.MinInt + 15;
+  ErrCharOverflow = Sys.MinInt + 16;
 
-  ErrIdentExp = MinInt + 20;
-  ErrIntExp = MinInt + 21;
-  ErrCharExp = MinInt + 22;
-  ErrBoolExp = MinInt + 23;
-  ErrFactorExp = MinInt + 24;
-  ErrConstExp = MinInt + 25;
-  ErrTypeExp = MinInt + 25;
-  ErrStmtExp = MinInt + 26;
-  ErrScalarExp = MinInt + 27;
-  ErrArrayExp = MinInt + 28;
-  ErrRecordExp = MinInt + 29;
+  ErrIdentExp = Sys.MinInt + 20;
+  ErrIntExp = Sys.MinInt + 21;
+  ErrCharExp = Sys.MinInt + 22;
+  ErrBoolExp = Sys.MinInt + 23;
+  ErrFactorExp = Sys.MinInt + 24;
+  ErrConstExp = Sys.MinInt + 25;
+  ErrTypeExp = Sys.MinInt + 25;
+  ErrStmtExp = Sys.MinInt + 26;
+  ErrScalarExp = Sys.MinInt + 27;
+  ErrArrayExp = Sys.MinInt + 28;
+  ErrRecordExp = Sys.MinInt + 29;
 
-  ErrCyclicImports = MinInt + 30;
-  ErrMainNotAllowed = MinInt + 31;
-  ErrMultipleDef = MinInt + 32;
-  ErrIdentUndef = MinInt + 33;
-  ErrIncompTypes = MinInt + 34;
-  ErrDivZero = MinInt + 35;
-  ErrNotLValue = MinInt + 36;
-  ErrParamsTooMany = MinInt + 37;
-  ErrParamsTooFew = MinInt + 38;
-  ErrNameMismatch = MinInt + 39;
-  ErrBadIndex = MinInt + 40;
+  ErrCyclicImports = Sys.MinInt + 30;
+  ErrMainNotAllowed = Sys.MinInt + 31;
+  ErrMultipleDef = Sys.MinInt + 32;
+  ErrIdentUndef = Sys.MinInt + 33;
+  ErrIncompTypes = Sys.MinInt + 34;
+  ErrDivZero = Sys.MinInt + 35;
+  ErrNotLValue = Sys.MinInt + 36;
+  ErrParamsTooMany = Sys.MinInt + 37;
+  ErrParamsTooFew = Sys.MinInt + 38;
+  ErrNameMismatch = Sys.MinInt + 39;
+  ErrBadIndex = Sys.MinInt + 40;
 
   MaxTypes = 20; MaxSymbols = 600;
   Marker = MaxSymbols - 1;
@@ -87,13 +86,6 @@ CONST
 
 TYPE
 
-  BufferData = ARRAY SizeBufferData OF CHAR;
-
-  Buffer = RECORD
-    pos : INTEGER;
-    data : BufferData
-  END;
-
   Keyword = ARRAY 12 OF CHAR;
 
   Ident = RECORD
@@ -104,7 +96,7 @@ TYPE
   Source = RECORD
     file : INTEGER;
     name : Ident;
-    buf : BufferData;
+    buf : Buf.BufferData;
     bufPos : INTEGER;
     bufLimit : INTEGER;
     line : INTEGER;
@@ -178,183 +170,34 @@ VAR
   entrypoint : INTEGER;
 
 
-(* sys calls *)
-
-
-PROCEDURE SysExit(exitNr : INTEGER);
-
-  VAR x : INTEGER;
-
-  BEGIN
-    SYS(0, x, ADDR(exitNr))
-  END SysExit;
-
-
-PROCEDURE SysGetInfo(VAR info : INTEGER; infoIx : INTEGER);
-
-  BEGIN
-    SYS(1, info, ADDR(infoIx))
-  END SysGetInfo;
-
-
-PROCEDURE SysGetArg(VAR arg : INTEGER; argIx : INTEGER);
-
-  BEGIN
-    SYS(2, arg, ADDR(argIx))
-  END SysGetArg;
-
-
-PROCEDURE SysOpenFile(VAR file : INTEGER; filename : INTEGER;
-                      mode : INTEGER);
-
-  BEGIN
-    SYS(11, file, ADDR(mode))
-  END SysOpenFile;
-
-
-PROCEDURE SysCloseFile(file : INTEGER);
-
-  VAR x : INTEGER;
-
-  BEGIN
-    SYS(12, x, ADDR(file))
-  END SysCloseFile;
-
-
-PROCEDURE SysReadFile(VAR n : INTEGER; file : INTEGER;
-                      addr : INTEGER; len : INTEGER);
-
-  BEGIN
-    SYS(13, n, ADDR(len))
-  END SysReadFile;
-
-
-PROCEDURE SysWriteFile(VAR n : INTEGER; file : INTEGER;
-                       addr : INTEGER; len : INTEGER);
-
-  BEGIN
-    SYS(14, n, ADDR(len))
-  END SysWriteFile;
-
-
 (* buffer procedures *)
 
 
-PROCEDURE BufReset(VAR buf : Buffer);
-
-  BEGIN
-    buf.pos := 0
-  END BufReset;
-
-
-PROCEDURE BufFlush(VAR buf : Buffer; file : INTEGER);
-
-  VAR n : INTEGER;
-
-  BEGIN
-    SysWriteFile(n, file, ADDR(buf.data), buf.pos);
-    BufReset(buf)
-  END BufFlush;
-
-
-PROCEDURE BufFlush2StdOut(VAR buf : Buffer);
-
-  CONST StdOut = 4;
-
-  VAR file : INTEGER;
-
-  BEGIN
-    SysGetInfo(file, StdOut);
-    BufFlush(buf, file)
-  END BufFlush2StdOut;
-
-
-PROCEDURE BufFlush2StdErr(VAR buf : Buffer);
-
-  CONST StdErr = 5;
-
-  VAR file : INTEGER;
-
-  BEGIN
-    SysGetInfo(file, StdErr);
-    BufFlush(buf, file)
-  END BufFlush2StdErr;
-
-
-PROCEDURE BufPutChar(VAR buf : Buffer; char : CHAR);
-
-  BEGIN
-    buf.data[buf.pos] := char;
-    buf.pos := buf.pos + 1
-  END BufPutChar;
-
-
-PROCEDURE BufPutChars(VAR buf : Buffer; chars : INTEGER);
-
-  BEGIN
-    IF chars > 0 THEN
-      BufPutChars(buf, chars DIV 256);
-      BufPutChar(buf, CHR(chars MOD 256))
-    END
-  END BufPutChars;
-
-
-PROCEDURE BufPutInt(VAR buf : Buffer; int : INTEGER);
-
-  VAR i : INTEGER; tmpBuf : ARRAY MaxLenInt + 1 OF CHAR;
-
-  BEGIN
-    i := 0;
-    IF int = MinInt THEN
-      (* -2147483648 *)
-      BufPutChars(buf, 2D323134H);
-      BufPutChars(buf, 37343833H);
-      BufPutChars(buf, 363438H);
-      int := 0
-    ELSIF int < 0 THEN
-      BufPutChar(buf, 2DX (*-*));
-      int := -int
-    ELSIF int = 0 THEN
-      tmpBuf[0] := 30X (*0*);
-      i := i + 1
-    END;
-    WHILE int # 0 DO
-      tmpBuf[i] := CHR(30H + int MOD 10);
-      i := i + 1;
-      int := int DIV 10
-    END;
-    WHILE i > 0 DO
-      i := i - 1;
-      BufPutChar(buf, tmpBuf[i])
-    END
-  END BufPutInt;
-
-
-PROCEDURE BufPutIdent(VAR buf : Buffer; VAR ident : Ident);
+PROCEDURE BufPutIdent(VAR buf : Buf.Buffer; VAR ident : Ident);
 
   VAR i : INTEGER;
 
   BEGIN
     i := 0;
     WHILE i < ident.len DO
-      BufPutChar(buf, ident.data[i]); i := i + 1
+      Buf.PutChar(buf, ident.data[i]); i := i + 1
     END
   END BufPutIdent;
 
 
-PROCEDURE BufPutKeyword(VAR buf : Buffer; token : INTEGER);
+PROCEDURE BufPutKeyword(VAR buf : Buf.Buffer; token : INTEGER);
 
   VAR kwLen : INTEGER;
 
 
-  PROCEDURE put(VAR buf : Buffer; VAR kw : Keyword; len : INTEGER);
+  PROCEDURE put(VAR buf : Buf.Buffer; VAR kw : Keyword; len : INTEGER);
 
     VAR ix : INTEGER;
 
     BEGIN
       ix := 0;
       WHILE ix < len DO
-        BufPutChar(buf, kw[ix]); ix := ix + 1
+        Buf.PutChar(buf, kw[ix]); ix := ix + 1
       END
     END put;
 
@@ -373,31 +216,31 @@ PROCEDURE BufPutKeyword(VAR buf : Buffer; token : INTEGER);
 
 PROCEDURE ScannerRaiseError(VAR s : Source; errorNr : INTEGER);
 
-  VAR console : Buffer;
+  VAR console : Buf.Buffer;
 
   BEGIN
-    BufReset(console);
-    BufPutChars(console, 0A0A4572H);
-    BufPutChars(console, 726F7220H);
-    BufPutChars(console, 696E20H);
+    Buf.Reset(console);
+    Buf.PutChars(console, 0A0A4572H);
+    Buf.PutChars(console, 726F7220H);
+    Buf.PutChars(console, 696E20H);
     BufPutIdent(console, s.name);
-    BufPutChars(console, 20617420H);
-    BufPutInt(console, s.line);
-    BufPutChar(console, 2FX);
-    BufPutInt(console, s.pos);
-    BufPutChars(console, 3A20H);
-    IF errorNr < MinInt + 256 THEN
-      BufPutInt(console, errorNr - MinInt)
+    Buf.PutChars(console, 20617420H);
+    Buf.PutInt(console, s.line);
+    Buf.PutChar(console, 2FX);
+    Buf.PutInt(console, s.pos);
+    Buf.PutChars(console, 3A20H);
+    IF errorNr < Sys.MinInt + 256 THEN
+      Buf.PutInt(console, errorNr - Sys.MinInt)
     ELSIF errorNr < NbrKeywords THEN
       BufPutKeyword(console, errorNr);
-      BufPutChars(console, 203FH)
+      Buf.PutChars(console, 203FH)
     ELSE
-      BufPutChars(console, errorNr);
-      BufPutChars(console, 203FH)
+      Buf.PutChars(console, errorNr);
+      Buf.PutChars(console, 203FH)
     END;
-    BufPutChar(console, 0AX);
-    BufFlush2StdErr(console);
-    SysExit(errorNr)
+    Buf.PutChar(console, 0AX);
+    Buf.Flush2StdErr(console);
+    Sys.Exit(errorNr)
   END ScannerRaiseError;
 
 
@@ -410,8 +253,8 @@ PROCEDURE ScannerReadChar(VAR s : Source);
       s.pos := s.pos + 1
     END;
     IF s.bufPos = s.bufLimit THEN
-      SysReadFile(s.bufLimit, s.file,
-        ADDR(s.buf), SizeBufferData);
+      Sys.ReadFile(s.bufLimit, s.file,
+        ADDR(s.buf), Buf.SizeBufferData);
       s.bufPos := 0
     END;
     IF s.bufPos < s.bufLimit THEN
@@ -428,11 +271,11 @@ PROCEDURE ScannerOpenSource(VAR s : Source; filename : INTEGER);
   CONST FileOpenModeRead = 1;
 
   BEGIN
-    IF filename = 0 THEN SysGetArg(filename, 0) END;
-    SysOpenFile(s.file, filename, FileOpenModeRead);
+    IF filename = 0 THEN Sys.GetArg(filename, 0) END;
+    Sys.OpenFile(s.file, filename, FileOpenModeRead);
     IF s.file # 0 THEN
       s.line := 0; s.pos := 0;
-      s.bufLimit := SizeBufferData;
+      s.bufLimit := Buf.SizeBufferData;
       s.bufPos := s.bufLimit;
       s.char := 0AH;
       ScannerReadChar(s)
@@ -443,7 +286,7 @@ PROCEDURE ScannerOpenSource(VAR s : Source; filename : INTEGER);
 PROCEDURE ScannerCloseSource(VAR s : Source);
 
   BEGIN
-    SysCloseFile(s.file)
+    Sys.CloseFile(s.file)
   END ScannerCloseSource;
 
 
@@ -564,14 +407,14 @@ PROCEDURE ScannerNext(VAR s : Source);
           i := 0;
           WHILE i < s.ident.len DO
             IF s.ident.data[i] # keywords[k][i] THEN
-              i := MaxInt
+              i := Sys.MaxInt
             ELSE
               i := i + 1
             END
           END;
           IF i = s.ident.len THEN
             s.token := k;
-            k := MaxInt
+            k := Sys.MaxInt
           ELSE
             k := k + 1
           END
@@ -584,7 +427,7 @@ PROCEDURE ScannerNext(VAR s : Source);
 
     VAR
 
-      buf : ARRAY MaxLenInt OF CHAR;
+      buf : ARRAY Buf.MaxLenInt OF CHAR;
       bufIx : INTEGER; bufIx2 : INTEGER;
       hex : BOOLEAN; base : INTEGER;
       n : INTEGER; c : CHAR;
@@ -595,7 +438,7 @@ PROCEDURE ScannerNext(VAR s : Source);
       hex := TRUE;
       base := 10;
       WHILE hex OR (s.char >= 30H) & (s.char <= 39H) DO
-        IF bufIx < MaxLenInt THEN
+        IF bufIx < Buf.MaxLenInt THEN
           buf[bufIx] := CHR(s.char);
           bufIx := bufIx + 1;
           ScannerReadChar(s);
@@ -618,8 +461,8 @@ PROCEDURE ScannerNext(VAR s : Source);
       END;
       bufIx2 := 0;
       s.value := 0;
-      max := MaxInt DIV base;
-      maxMod := MaxInt MOD base;
+      max := Sys.MaxInt DIV base;
+      maxMod := Sys.MaxInt MOD base;
       WHILE bufIx2 < bufIx DO
         c := buf[bufIx2];
         bufIx2 := bufIx2 + 1;
@@ -1477,10 +1320,10 @@ PROCEDURE GenCreateFile;
   VAR filename : INTEGER; file : INTEGER; n : INTEGER;
 
   BEGIN
-    SysGetArg(filename, 1);
-    SysOpenFile(file, filename, FileOpenModeWrite);
-    SysWriteFile(n, file, ADDR(code), pc * 4);
-    SysCloseFile(file)
+    Sys.GetArg(filename, 1);
+    Sys.OpenFile(file, filename, FileOpenModeWrite);
+    Sys.WriteFile(n, file, ADDR(code), pc * 4);
+    Sys.CloseFile(file)
   END GenCreateFile;
 
 
@@ -1614,7 +1457,7 @@ PROCEDURE parse;
       BEGIN
         IF op = TokMinus THEN
           IF g.mode = ClassConst THEN
-            IF g.addr1 # MinInt THEN
+            IF g.addr1 # Sys.MinInt THEN
               g.addr1 := -g.addr1
             ELSE
               ScannerRaiseError(s, ErrIntOverflow)
@@ -1640,10 +1483,10 @@ PROCEDURE parse;
             IF (g.addr1 > 0) & (g2.addr1 < 0) OR
                (g.addr1 < 0) & (g2.addr1 > 0) THEN
               isNeg := TRUE;
-              i := MinInt
+              i := Sys.MinInt
             ELSE
               isNeg := FALSE;
-              i := MaxInt
+              i := Sys.MaxInt
             END;
             i := i DIV g2.addr1;
             IF (g.addr1 < 0) & (i > g.addr1) OR
@@ -1681,7 +1524,7 @@ PROCEDURE parse;
       PROCEDURE add(VAR s : Source; VAR g : Gen; VAR g2 : Gen);
 
         BEGIN
-          IF MaxInt - g2.addr1 < g.addr1 THEN
+          IF Sys.MaxInt - g2.addr1 < g.addr1 THEN
             ScannerRaiseError(s, ErrIntOverflow)
           ELSE
             g.addr1 := g.addr1 + g2.addr1
@@ -1692,7 +1535,7 @@ PROCEDURE parse;
       PROCEDURE sub(VAR s : Source; VAR g : Gen; VAR g2 : Gen);
 
         BEGIN
-          IF MinInt + g2.addr1 > g.addr1 THEN
+          IF Sys.MinInt + g2.addr1 > g.addr1 THEN
             ScannerRaiseError(s, ErrIntOverflow)
           ELSE
             g.addr1 := g.addr1 - g2.addr1
@@ -2115,7 +1958,7 @@ PROCEDURE parse;
             accept(s, TokParenR); ScannerNext(s)
           END;
           IF (y = Marker) OR (symbols[y].value < 0) THEN
-            IF proc.value = MinInt THEN (* forward call *)
+            IF proc.value = Sys.MinInt THEN (* forward call *)
               GenFCall(proc.value2)
             ELSE (* backward call *)
               GenBCall(proc.value)
@@ -2289,7 +2132,7 @@ PROCEDURE parse;
 
       BEGIN (* proc *)
         identDef(s, y, ClassProc);
-        symbols[y].value := MinInt (* forward call marker *);
+        symbols[y].value := Sys.MinInt (* forward call marker *);
         symbols[y].value2 := 0;
         level := level + 1;
         STableAllocSymbol(s, ClassScope);
@@ -2305,7 +2148,7 @@ PROCEDURE parse;
         lastParam := allocSymbol;
         varsize := 0;
         decls(s, varsize);
-        IF symbols[y].value = MinInt THEN
+        IF symbols[y].value = Sys.MinInt THEN
           GenFixLink(-symbols[y].value2)
         END;
         symbols[y].value := -pc;
@@ -2482,4 +2325,4 @@ BEGIN
   GenEmitOc3(OcPOP, RegPC, RegSP, 0);
   GenEmit(varsize); GenEmit(entrypoint * 4);
   GenCreateFile
-END NPC00b.
+END NPC01.

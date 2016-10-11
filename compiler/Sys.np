@@ -1,0 +1,65 @@
+MODULE Sys;
+
+
+CONST
+
+  MaxInt* = 7FFFFFFFH;
+  MinInt* = -MaxInt - 1;
+
+
+PROCEDURE Exit*(exitNr : INTEGER);
+
+  VAR x : INTEGER;
+
+  BEGIN
+    SYS(0, x, ADDR(exitNr))
+  END Exit;
+
+
+PROCEDURE GetInfo*(VAR info : INTEGER; infoIx : INTEGER);
+
+  BEGIN
+    SYS(1, info, ADDR(infoIx))
+  END GetInfo;
+
+
+PROCEDURE GetArg*(VAR arg : INTEGER; argIx : INTEGER);
+
+  BEGIN
+    SYS(2, arg, ADDR(argIx))
+  END GetArg;
+
+
+PROCEDURE OpenFile*(VAR file : INTEGER; filename : INTEGER; mode : INTEGER);
+
+  BEGIN
+    SYS(11, file, ADDR(mode))
+  END OpenFile;
+
+
+PROCEDURE CloseFile*(file : INTEGER);
+
+  VAR x : INTEGER;
+
+  BEGIN
+    SYS(12, x, ADDR(file))
+  END CloseFile;
+
+
+PROCEDURE ReadFile*(VAR n : INTEGER; file : INTEGER;
+                    addr : INTEGER; len : INTEGER);
+
+  BEGIN
+    SYS(13, n, ADDR(len))
+  END ReadFile;
+
+
+PROCEDURE WriteFile*(VAR n : INTEGER; file : INTEGER;
+                     addr : INTEGER; len : INTEGER);
+
+  BEGIN
+    SYS(14, n, ADDR(len))
+  END WriteFile;
+
+
+END Sys.
