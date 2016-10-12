@@ -858,59 +858,56 @@ PROCEDURE STableFindSymbol(VAR y : INTEGER; scope : INTEGER);
 
 PROCEDURE STableDeallocScope(scope : INTEGER; keepPublics : BOOLEAN);
 
-  VAR y : INTEGER; y2 : INTEGER;
+  VAR y : INTEGER; yNext : INTEGER; yPrev : INTEGER;
 
 
-  PROCEDURE symbol(VAR y : INTEGER);
+  PROCEDURE symbol(yIx : INTEGER; VAR y : Symbol; keepPublics : BOOLEAN);
 
-    VAR t : INTEGER;
 
-    PROCEDURE type(t : INTEGER);
+    PROCEDURE type(t : INTEGER; keepPublics : BOOLEAN);
 
       BEGIN
-        IF types[t].form = FormArray THEN
+        IF ~keepPublics & (types[t].form = FormArray) THEN
           IF types[types[t].value].link = -1 THEN
-            type(types[t].value)
+            type(types[t].value, keepPublics)
           END;
           types[t].link := freeTypes; freeTypes := t
         ELSIF types[t].form = FormRecord THEN
-          STableDeallocScope(types[t].value, TRUE);
-          types[t].link := freeTypes; freeTypes := t
+          STableDeallocScope(types[t].value, keepPublics);
+          IF ~keepPublics THEN
+            types[t].link := freeTypes; freeTypes := t
+          END
         END
       END type;
 
 
     BEGIN (* symbol *)
-      IF symbols[y].class = ClassProc THEN
-        STableDeallocScope(symbols[y].scope, FALSE)
+      IF (y.type >= 0) &
+         ((types[y.type].link = yIx) OR (types[y.type].link = -1)) THEN
+        type(y.type, keepPublics)
       END;
-      t := symbols[y].type;
-      IF (t >= 0) & ((types[t].link = y) OR (types[t].link = -1)) THEN
-        type(t)
+      IF ~keepPublics & (y.class = ClassProc) THEN
+        STableDeallocScope(y.scope, FALSE)
       END
     END symbol;
 
 
   BEGIN (* STableDeallocScope *)
-    IF keepPublics THEN
-      y := scope;
-      WHILE symbols[y].next # Marker DO
-        y2 := symbols[y].next;
-        IF symbols[y2].public THEN
-          y := y2
-        ELSE
-          symbol(y2);
-          symbols[y].next := symbols[y2].next;
-          symbols[y2].next := freeSymbols;
-          freeSymbols := y2
-        END
+    y := scope; yPrev := -1;
+    WHILE y # Marker DO
+      symbol(y, symbols[y], keepPublics);
+      yNext := symbols[y].next;
+      IF keepPublics &
+         ((symbols[y].class = ClassScope) OR symbols[y].public) THEN
+        yPrev := y; y := yNext
+      ELSE
+        IF yPrev # -1 THEN
+          symbols[yPrev].next := yNext
+        END;
+        symbols[y].next := freeSymbols;
+        freeSymbols := y;
+        y := yNext
       END
-    ELSE
-      y := scope; symbol(y);
-      WHILE symbols[y].next # Marker DO
-        y := symbols[y].next; symbol(y)
-      END;
-      symbols[y].next := freeSymbols; freeSymbols := scope
     END
   END STableDeallocScope;
 
@@ -2457,7 +2454,7 @@ PROCEDURE parse;
       END;
       ScannerNext(s); accept(s, TokDot);
       symbols[yModule].value := 1; (* compiled flag *)
-(*      STableDeallocScope(topScope, symbols[yModule].value2 # 0); *)
+      STableDeallocScope(topScope, symbols[yModule].value2 # 0);
       topScope := symbols[topScope].scope
     END module;
 
