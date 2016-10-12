@@ -836,7 +836,7 @@ PROCEDURE STableDeallocScope(scope : INTEGER);
   VAR y : INTEGER;
 
 
-  PROCEDURE symbol(VAR y : INTEGER);
+  PROCEDURE symbol(y : INTEGER);
 
     VAR t : INTEGER;
 
