@@ -1,0 +1,448 @@
+MODULE NPC01S; (* scanner *)
+
+IMPORT Base := NPC01B;
+
+
+CONST
+
+  MaxLenIdent* = 32;
+
+  TokIdent* = -1; TokInt* = -2; TokChar* = -3;
+
+  TokDo* = 1; TokIf* = 2; TokOf* = 3; TokOr* = 4; TokDiv* = 5; TokEnd* = 6;
+  TokMod* = 7; TokSys* = 8; TokVar* = 9; TokElse* = 10; TokThen* = 11;
+  TokTrue* = 12; TokType* = 13; TokArray* = 14; TokBegin* = 15;
+  TokConst* = 16; TokElsif* = 17; TokFalse* = 18; TokWhile* = 19;
+  TokImport* = 20; TokModule* = 21; TokRecord* = 22; TokProcedure* = 23;
+  NbrKeywords* = 24;
+
+  TokAmper* = 26H; TokAssign* = 3A3DH; TokAsterisk* = 2AH; TokBraceL* = 7BH;
+  TokBraceR* = 7DH; TokBrackL* = 5BH; TokBrackR* = 5DH; TokColon* = 3AH;
+  TokComma* = 2CH; TokDot* = 2EH; TokMinus* = 2DH; TokParenL* = 28H;
+  TokParenR* = 29H; TokPlus* = 2BH; TokSemic* = 3BH; TokSlash* = 2FH;
+  TokTilde* = 7EH; TokEq* = 3DH; TokEqN* = 23H; TokLss* = 3CH;
+  TokLEq* = 3D3CH; TokGtr* = 3EH; TokGEq* = 3D3EH;
+
+
+TYPE
+
+  Keyword = ARRAY 12 OF CHAR;
+
+  Ident* = RECORD
+    data* : ARRAY Scanner.MaxLenIdent OF CHAR;
+    len* : INTEGER
+  END;
+
+  Source* = RECORD
+    file* : INTEGER;
+    name* : Ident;
+    buf : Buf.BufferData;
+    bufPos : INTEGER;
+    bufLimit : INTEGER;
+    line* : INTEGER;
+    pos* : INTEGER;
+    char : INTEGER;
+    token* : INTEGER;
+    ident* : Ident;
+    value* : INTEGER
+  END;
+
+
+VAR
+
+  keywordLens : ARRAY 10 OF INTEGER;
+  keywords : ARRAY NbrKeywords OF Keyword;
+
+
+PROCEDURE BufPutIdent(VAR buf : Buf.Buffer; VAR ident : Ident);
+
+  VAR i : INTEGER;
+
+  BEGIN
+    i := 0;
+    WHILE i < ident.len DO
+      Buf.PutChar(buf, ident.data[i]); i := i + 1
+    END
+  END BufPutIdent;
+
+
+PROCEDURE BufPutKeyword(VAR buf : Buf.Buffer; token : INTEGER);
+
+  VAR kwLen : INTEGER;
+
+
+  PROCEDURE put(VAR buf : Buf.Buffer; VAR kw : Keyword; len : INTEGER);
+
+    VAR ix : INTEGER;
+
+    BEGIN
+      ix := 0;
+      WHILE ix < len DO
+        Buf.PutChar(buf, kw[ix]); ix := ix + 1
+      END
+    END put;
+
+
+  BEGIN (* BufPutKeyword *)
+    kwLen := 0;
+    WHILE keywordLens[kwLen] < token DO
+      kwLen := kwLen + 1
+    END;
+    put(buf, keywords[token], kwLen)
+  END BufPutKeyword;
+
+
+PROCEDURE RaiseError*(VAR s : Source; errorNr : INTEGER);
+
+  VAR console : Buf.Buffer;
+
+  BEGIN
+    Buf.Reset(console);
+    Buf.PutChars(console, 0A0A4572H);
+    Buf.PutChars(console, 726F7220H);
+    Buf.PutChars(console, 696E20H);
+    BufPutIdent(console, s.name);
+    Buf.PutChars(console, 20617420H);
+    Buf.PutInt(console, s.line);
+    Buf.PutChar(console, 2FX);
+    Buf.PutInt(console, s.pos);
+    Buf.PutChars(console, 3A20H);
+    IF errorNr < Sys.MinInt + 256 THEN
+      Buf.PutInt(console, errorNr - Sys.MinInt)
+    ELSIF errorNr < Scanner.NbrKeywords THEN
+      BufPutKeyword(console, errorNr);
+      Buf.PutChars(console, 203FH)
+    ELSE
+      Buf.PutChars(console, errorNr);
+      Buf.PutChars(console, 203FH)
+    END;
+    Buf.PutChar(console, 0AX);
+    Buf.Flush2StdErr(console);
+    Sys.Exit(errorNr)
+  END RaiseError;
+
+
+PROCEDURE ReadChar*(VAR s : Source);
+
+  BEGIN
+    IF s.char = 0AH THEN
+      s.line := s.line + 1; s.pos := 1
+    ELSE
+      s.pos := s.pos + 1
+    END;
+    IF s.bufPos = s.bufLimit THEN
+      Sys.ReadFile(s.bufLimit, s.file,
+        ADDR(s.buf), Buf.SizeBufferData);
+      s.bufPos := 0
+    END;
+    IF s.bufPos < s.bufLimit THEN
+      s.char := ORD(s.buf[s.bufPos]);
+      s.bufPos := s.bufPos + 1
+    ELSE
+      RaiseError(s, Base.ErrUnexpEof)
+    END
+  END ReadChar;
+
+
+PROCEDURE OpenSource*(VAR s : Source; filename : INTEGER);
+
+  CONST FileOpenModeRead = 1;
+
+  BEGIN
+    IF filename = 0 THEN Sys.GetArg(filename, 0) END;
+    Sys.OpenFile(s.file, filename, FileOpenModeRead);
+    IF s.file # 0 THEN
+      s.line := 0; s.pos := 0;
+      s.bufLimit := Buf.SizeBufferData;
+      s.bufPos := s.bufLimit;
+      s.char := 0AH;
+      ReadChar(s)
+    END
+  END OpenSource;
+
+
+PROCEDURE CloseSource*(VAR s : Source);
+
+  BEGIN
+    Sys.CloseFile(s.file)
+  END CloseSource;
+
+
+PROCEDURE Initialize*;
+
+
+  PROCEDURE enterKW(token : INTEGER; chars1 : INTEGER;
+                    chars2 : INTEGER; chars3 : INTEGER);
+
+
+    PROCEDURE enterChars(VAR kw : Keyword; ix : INTEGER; chars : INTEGER);
+
+      BEGIN
+        IF chars > 0 THEN
+          enterChars(kw, ix + 1, chars DIV 256);
+          kw[ix] := CHR(chars MOD 256)
+        END
+      END enterChars;
+
+
+    BEGIN (* enterKW *)
+      enterChars(keywords[token], 0, chars1);
+      enterChars(keywords[token], 4, chars2);
+      enterChars(keywords[token], 8, chars3)
+    END enterKW;
+
+
+  BEGIN (* Initialize *)
+    keywordLens[0] := 0;
+    keywordLens[1] := 0;
+    enterKW(Scanner.TokDo, 4F44H, 0, 0);
+    enterKW(Scanner.TokIf, 4649H, 0, 0);
+    enterKW(Scanner.TokOf, 464FH, 0, 0);
+    enterKW(Scanner.TokOr, 524FH, 0, 0);
+    keywordLens[2] := Scanner.TokOr;
+    enterKW(Scanner.TokDiv, 564944H, 0, 0);
+    enterKW(Scanner.TokEnd, 444E45H, 0, 0);
+    enterKW(Scanner.TokMod, 444F4DH, 0, 0);
+    enterKW(Scanner.TokSys, 535953H, 0, 0);
+    enterKW(Scanner.TokVar, 524156H, 0, 0);
+    keywordLens[3] := Scanner.TokVar;
+    enterKW(Scanner.TokElse, 45534C45H, 0, 0);
+    enterKW(Scanner.TokThen, 4E454854H, 0, 0);
+    enterKW(Scanner.TokTrue, 45555254H, 0, 0);
+    enterKW(Scanner.TokType, 45505954H, 0, 0);
+    keywordLens[4] := Scanner.TokType;
+    enterKW(Scanner.TokArray, 41525241H, 59H, 0);
+    enterKW(Scanner.TokBegin, 49474542H, 4EH, 0);
+    enterKW(Scanner.TokConst, 534E4F43H, 54H, 0);
+    enterKW(Scanner.TokElsif, 49534C45H, 46H, 0);
+    enterKW(Scanner.TokFalse, 534C4146H, 45H, 0);
+    enterKW(Scanner.TokWhile, 4C494857H, 45H, 0);
+    keywordLens[5] := Scanner.TokWhile;
+    enterKW(Scanner.TokImport, 4F504D49H, 5452H, 0);
+    enterKW(Scanner.TokModule, 55444F4DH, 454CH, 0);
+    enterKW(Scanner.TokRecord, 4F434552H, 4452H, 0);
+    keywordLens[6] := Scanner.TokRecord;
+    keywordLens[7] := Scanner.TokRecord;
+    keywordLens[8] := Scanner.TokRecord;
+    enterKW(Scanner.TokProcedure, 434F5250H, 52554445H, 45H);
+    keywordLens[9] := Scanner.TokProcedure
+  END Initialize;
+
+
+PROCEDURE Next*(VAR s : Source);
+
+
+  PROCEDURE comment(VAR s : Source);
+
+    VAR repeat : BOOLEAN;
+
+    BEGIN
+      ReadChar(s);
+      repeat := TRUE;
+      WHILE repeat DO
+        IF s.char = 28H (* ( *) THEN
+          ReadChar(s);
+          IF s.char = 2AH (* * *) THEN
+            comment(s)
+          END
+        ELSIF s.char = 2AH (* * *) THEN
+          ReadChar(s);
+          IF s.char = 29H (* ) *) THEN
+            repeat := FALSE;
+            ReadChar(s)
+          END
+        ELSE
+          ReadChar(s)
+        END
+      END
+    END comment;
+
+
+  PROCEDURE identifier(VAR s : Source);
+
+    VAR repeat : BOOLEAN; i : INTEGER; k : INTEGER;
+
+    BEGIN
+      s.ident.len := 0;
+      repeat := TRUE;
+      WHILE repeat DO
+        IF s.ident.len < Scanner.MaxLenIdent THEN
+          s.ident.data[s.ident.len] := CHR(s.char);
+          s.ident.len := s.ident.len + 1;
+          ReadChar(s);
+          repeat :=
+            (s.char >= 30H) & (s.char <= 39H) OR
+            (s.char >= 41H) & (s.char <= 5AH) OR
+            (s.char >= 61H) & (s.char <= 7AH)
+        ELSE
+          RaiseError(s, Base.ErrIdentTooLong)
+        END
+      END;
+      s.token := Scanner.TokIdent;
+      IF s.ident.len <= 9 (* biggest keyword PROCEDURE *) THEN
+        k := keywordLens[s.ident.len - 1] + 1;
+        WHILE k <= keywordLens[s.ident.len] DO
+          i := 0;
+          WHILE i < s.ident.len DO
+            IF s.ident.data[i] # keywords[k][i] THEN
+              i := Sys.MaxInt
+            ELSE
+              i := i + 1
+            END
+          END;
+          IF i = s.ident.len THEN
+            s.token := k;
+            k := Sys.MaxInt
+          ELSE
+            k := k + 1
+          END
+        END
+      END
+    END identifier;
+
+
+  PROCEDURE number(VAR s : Source);
+
+    VAR
+
+      buf : ARRAY Buf.MaxLenInt OF CHAR;
+      bufIx : INTEGER; bufIx2 : INTEGER;
+      hex : BOOLEAN; base : INTEGER;
+      n : INTEGER; c : CHAR;
+      max  : INTEGER; maxMod : INTEGER;
+
+    BEGIN
+      bufIx := 0;
+      hex := TRUE;
+      base := 10;
+      WHILE hex OR (s.char >= 30H) & (s.char <= 39H) DO
+        IF bufIx < Buf.MaxLenInt THEN
+          buf[bufIx] := CHR(s.char);
+          bufIx := bufIx + 1;
+          ReadChar(s);
+          hex := (s.char >= 41H) & (s.char <= 46H);
+          IF hex THEN base := 16 END
+        ELSE
+          RaiseError(s, Base.ErrIntTooLong)
+        END
+      END;
+      s.token := Scanner.TokInt;
+      IF s.char = 48H THEN
+        base := 16;
+        ReadChar(s)
+      ELSIF s.char = 58H THEN
+        base := 16;
+        ReadChar(s);
+        s.token := Scanner.TokChar
+      ELSIF base = 16 THEN
+        RaiseError(s, Base.ErrPostfixH)
+      END;
+      bufIx2 := 0;
+      s.value := 0;
+      max := Sys.MaxInt DIV base;
+      maxMod := Sys.MaxInt MOD base;
+      WHILE bufIx2 < bufIx DO
+        c := buf[bufIx2];
+        bufIx2 := bufIx2 + 1;
+        IF (c >= 41X) & (c <= 46X) THEN
+          n := 10 - 41H + ORD(c)
+        ELSE
+          n := - 30H + ORD(c)
+        END;
+        IF (s.value < max) OR (n <= maxMod) THEN
+          s.value := base * s.value + n
+        ELSE
+          RaiseError(s, Base.ErrIntOverflow)
+        END
+      END;
+      IF (s.token = Scanner.TokChar) & (s.value > 255) THEN
+        RaiseError(s, Base.ErrCharOverflow)
+      END
+    END number;
+
+
+  BEGIN (* Next *)
+    s.token := 0;
+    WHILE s.token = 0 DO
+      IF s.char <= 20H THEN
+        ReadChar(s)
+      ELSIF s.char < 41H (* A *) THEN
+        IF s.char < 30H (* 0 *) THEN
+          IF s.char = 23H (* # *) THEN
+            s.token := Scanner.TokEqN; ReadChar(s)
+          ELSIF s.char = 26H (* & *) THEN
+            s.token := Scanner.TokAmper; ReadChar(s)
+          ELSIF s.char = 28H (* ( *) THEN
+            s.token := Scanner.TokParenL; ReadChar(s);
+            IF s.char = 2AH (* * *) THEN
+              comment(s); s.token := 0
+            END
+          ELSIF s.char = 29H (* ) *) THEN
+            s.token := Scanner.TokParenR; ReadChar(s)
+          ELSIF s.char = 2AH (* * *) THEN
+            s.token := Scanner.TokAsterisk; ReadChar(s)
+          ELSIF s.char = 2BH (* + *) THEN
+            s.token := Scanner.TokPlus; ReadChar(s)
+          ELSIF s.char = 2CH (* , *) THEN
+            s.token := Scanner.TokComma; ReadChar(s)
+          ELSIF s.char = 2DH (* - *) THEN
+            s.token := Scanner.TokMinus; ReadChar(s)
+          ELSIF s.char = 2EH (* . *) THEN
+            s.token := Scanner.TokDot; ReadChar(s)
+          ELSIF s.char = 2FH (* / *) THEN
+            s.token := Scanner.TokSlash; ReadChar(s)
+          ELSE (* ! $ % ' *)
+            ReadChar(s)
+          END
+        ELSIF s.char < 3AH (* : *) THEN
+          number(s)
+        ELSIF s.char = 3AH (* : *) THEN
+          s.token := Scanner.TokColon; ReadChar(s);
+          IF s.char = 3DH (* = *) THEN
+            s.token := Scanner.TokAssign; ReadChar(s)
+          END
+        ELSIF s.char = 3BH (* ; *) THEN
+          s.token := Scanner.TokSemic; ReadChar(s)
+        ELSIF s.char = 3CH (* < *) THEN
+          s.token := Scanner.TokLss; ReadChar(s);
+          IF s.char = 3DH (* = *) THEN
+            s.token := Scanner.TokLEq; ReadChar(s)
+          END
+        ELSIF s.char = 3DH (* = *) THEN
+          s.token := Scanner.TokEq; ReadChar(s)
+        ELSIF s.char = 3EH (* > *) THEN
+          s.token := Scanner.TokGtr; ReadChar(s);
+          IF s.char = 3DH (* = *) THEN
+            s.token := Scanner.TokGEq; ReadChar(s)
+          END
+        ELSE (* ? @ *)
+          ReadChar(s)
+        END
+      ELSIF s.char < 5BH (* [ *) THEN
+        identifier(s)
+      ELSIF s.char < 61H (* a *) THEN
+        IF s.char = 5BH (* [ *) THEN
+          s.token := Scanner.TokBrackL; ReadChar(s)
+        ELSIF s.char = 5DH (* ] *) THEN
+          s.token := Scanner.TokBrackR; ReadChar(s)
+        ELSE (* ^ _ ` *)
+          ReadChar(s)
+        END
+      ELSIF s.char < 7BH (* { *) THEN
+        identifier(s)
+      ELSE
+        IF s.char = 7BH (* { *) THEN
+          s.token := Scanner.TokBraceL; ReadChar(s)
+        ELSIF s.char = 7DH (* } *) THEN
+          s.token := Scanner.TokBraceR; ReadChar(s)
+        ELSIF s.char = 7EH (* ~ *) THEN
+          s.token := Scanner.TokTilde; ReadChar(s)
+        ELSE (* | >7E *)
+          ReadChar(s)
+        END
+      END
+    END
+  END Next;
+
+
+END NPC01S.

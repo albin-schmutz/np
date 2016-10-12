@@ -1,0 +1,45 @@
+MODULE NPC01B (* base *);
+
+
+CONST
+
+  ErrOutOfMemTypes* = Sys.MinInt + 1;
+  ErrOutOfMemSymbols* = Sys.MinInt + 2;
+  ErrOutOfRegs* = Sys.MinInt + 3;
+  ErrCheckRegs* = Sys.MinInt + 4;
+  ErrOpenFile* = Sys.MinInt + 5;
+
+  ErrUnexpEof* = Sys.MinInt + 10;
+  ErrUnexpEofInComment* = Sys.MinInt + 11;
+  ErrIdentTooLong* = Sys.MinInt + 12;
+  ErrIntTooLong* = Sys.MinInt + 13;
+  ErrPostfixH* = Sys.MinInt + 14;
+  ErrIntOverflow* = Sys.MinInt + 15;
+  ErrCharOverflow* = Sys.MinInt + 16;
+
+  ErrIdentExp* = Sys.MinInt + 20;
+  ErrIntExp* = Sys.MinInt + 21;
+  ErrCharExp* = Sys.MinInt + 22;
+  ErrBoolExp* = Sys.MinInt + 23;
+  ErrFactorExp* = Sys.MinInt + 24;
+  ErrConstExp* = Sys.MinInt + 25;
+  ErrTypeExp* = Sys.MinInt + 25;
+  ErrStmtExp* = Sys.MinInt + 26;
+  ErrScalarExp* = Sys.MinInt + 27;
+  ErrArrayExp* = Sys.MinInt + 28;
+  ErrRecordExp* = Sys.MinInt + 29;
+
+  ErrCyclicImports* = Sys.MinInt + 30;
+  ErrMainNotAllowed* = Sys.MinInt + 31;
+  ErrMultipleDef* = Sys.MinInt + 32;
+  ErrIdentUndef* = Sys.MinInt + 33;
+  ErrIncompTypes* = Sys.MinInt + 34;
+  ErrDivZero* = Sys.MinInt + 35;
+  ErrNotLValue* = Sys.MinInt + 36;
+  ErrParamsTooMany* = Sys.MinInt + 37;
+  ErrParamsTooFew* = Sys.MinInt + 38;
+  ErrNameMismatch* = Sys.MinInt + 39;
+  ErrBadIndex* = Sys.MinInt + 40;
+
+
+END NPC01B.
