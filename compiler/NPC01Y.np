@@ -1,0 +1,355 @@
+MODULE NPC01Y; (* symbol tables *)
+
+
+CONST
+
+  MaxTypes = 20; MaxSymbols = 600;
+  Marker* = MaxSymbols - 1;
+
+  ClassScope* = 1; ClassModule* = 2; ClassQual* = 3; ClassConst* = 4;
+  ClassType* = 5; ClassVar* = 6; ClassProc* = 7; ClassField* = 8;
+  ClassFunc* = 9;
+
+  FormBool* = 1; FormChar* = 2; FormInt* = 3;
+  FormArray* = 8; FormRecord* = 9;
+
+
+TYPE
+
+  Type = RECORD
+    form* : INTEGER;
+    size* : INTEGER;
+    len* : INTEGER;
+    value* : INTEGER; (* - array: base type
+                         - record: scope *)
+    link: INTEGER (* - owner symbol (allocated) or
+                     - next in free list (deallocated),
+                     - -1 = NIL *)
+  END;
+
+  Symbol* = RECORD
+    name* : Scanner.Ident;
+    public : BOOLEAN;
+    level* : INTEGER;
+    class* : INTEGER;
+    type* : INTEGER;
+    scope* : INTEGER; (* parent scope *)
+    value* : INTEGER; (* - const or address
+                         - ClassModule 0 if not yet compiled
+                         - ClassQual import, ref to module *)
+    value2* : INTEGER; (* - deref level for VAR params or
+                          - forward address for ClassProc
+                          - next module *)
+    next*: INTEGER (* - next in scope (allocated) or
+                      - free list (deallocated),
+                      - -1 = NIL *)
+  END;
+
+
+VAR
+
+  types* : ARRAY MaxTypes OF Type;
+  freeTypes : INTEGER; (* first type of free type list *)
+  symbols* : ARRAY MaxSymbols OF Symbol;
+  freeSymbols : INTEGER; (* first symbol of free symbol list *)
+  allocSymbol* : INTEGER; (* last allocated symbol *)
+  topScope* : INTEGER; (* top symbol of scope stack *)
+  boolType* : INTEGER; charType* : INTEGER; intType* : INTEGER;
+
+
+PROCEDURE Initialize*;
+
+  VAR i : INTEGER;
+
+  BEGIN
+    i := 0;
+    WHILE i < MaxTypes DO
+      types[i].form := 0;
+      types[i].size := 0;
+      types[i].len := 0;
+      types[i].value := -1;
+      types[i].link := i + 1;
+      i := i + 1
+    END;
+    types[i - 1].link := -1;
+    freeTypes := 0;
+    i := 0;
+    WHILE i < MaxSymbols DO
+      symbols[i].name.len := 0;
+      symbols[i].level := 0;
+      symbols[i].class := 0;
+      symbols[i].type := -1;
+      symbols[i].scope := -1;
+      symbols[i].value := 0;
+      symbols[i].value2 := 0;
+      symbols[i].next := i + 1;
+      i := i + 1
+    END;
+    symbols[Marker].next := -1;
+    freeSymbols := 0;
+    topScope := -1
+  END Initialize;
+
+
+PROCEDURE AllocType*(VAR s : Scanner.Source; VAR t : INTEGER;
+                     form : INTEGER; size: INTEGER; link : INTEGER);
+
+  BEGIN
+    IF freeTypes # -1 THEN
+      types[freeTypes].form := form;
+      types[freeTypes].size := size;
+      types[freeTypes].len := 0;
+      types[freeTypes].value := -1;
+      t := freeTypes;
+      freeTypes := types[t].link;
+      types[t].link := link
+    ELSE
+      Scanner.RaiseError(s, Base.ErrOutOfMemTypes)
+    END
+  END AllocType;
+
+
+PROCEDURE TypeSize*(t : INTEGER; size : INTEGER);
+
+  BEGIN
+    types[t].size := size
+  END TypeSize;
+
+
+PROCEDURE TypeValue*(t : INTEGER; value : INTEGER);
+
+  BEGIN
+    types[t].value := value
+  END TypeValue;
+
+
+PROCEDURE CompIdent*(VAR eq : BOOLEAN;
+                     VAR i1 : Scanner.Ident;
+                     VAR i2 : Scanner.Ident);
+
+  VAR i : INTEGER;
+
+  BEGIN
+    IF i1.len # i2.len THEN
+      eq := FALSE
+    ELSE
+      i := 0; eq := TRUE;
+      WHILE i < i1.len DO
+        IF i1.data[i] = i2.data[i] THEN
+          i := i + 1
+        ELSE
+          i := i1.len;
+          eq := FALSE
+        END
+      END
+    END
+  END CompIdent;
+
+
+PROCEDURE CopyIdent*(VAR trg : Scanner.Ident; VAR src : Scanner.Ident);
+
+  VAR i : INTEGER;
+
+  BEGIN
+    trg.len := src.len; i := 0;
+    WHILE i < src.len DO
+      trg.data[i] := src.data[i]; i := i + 1
+    END
+  END CopyIdent;
+
+
+PROCEDURE AllocSymbol*(VAR s : Scanner.Source; class : INTEGER;
+                       level : INTEGER);
+
+  BEGIN
+    IF freeSymbols # Marker THEN
+      IF class = ClassScope THEN
+        symbols[freeSymbols].name.len := 0;
+        symbols[freeSymbols].scope := topScope;
+        topScope := freeSymbols
+      ELSE
+        CopyIdent(symbols[freeSymbols].name, symbols[Marker].name);
+        symbols[freeSymbols].scope := -1
+      END;
+      symbols[freeSymbols].public := FALSE;
+      symbols[freeSymbols].level := level;
+      symbols[freeSymbols].class := class;
+      symbols[freeSymbols].type := -1;
+      symbols[freeSymbols].value := 0;
+      symbols[freeSymbols].value2 := 0;
+      allocSymbol := freeSymbols;
+      freeSymbols := symbols[allocSymbol].next;
+      symbols[allocSymbol].next := Marker
+    ELSE
+      Scanner.RaiseError(s, Base.ErrOutOfMemSymbols)
+    END
+  END AllocSymbol;
+
+
+PROCEDURE FindSymbol*(VAR y : INTEGER; scope : INTEGER);
+
+  VAR eq : BOOLEAN;
+
+  BEGIN
+    y := scope;
+    CompIdent(eq,
+      symbols[symbols[y].next].name, symbols[Marker].name);
+    WHILE ~eq DO
+      y := symbols[y].next;
+      CompIdent(eq,
+        symbols[symbols[y].next].name, symbols[Marker].name)
+    END
+  END FindSymbol;
+
+
+PROCEDURE SymbolPublic*(y : INTEGER);
+
+  BEGIN
+    symbols[y].public := TRUE
+  END SymbolPublic;
+
+
+PROCEDURE SymbolValue*(y : INTEGER; value : INTEGER);
+
+  BEGIN
+    symbols[y].value := value
+  END SymbolValue;
+
+
+PROCEDURE SymbolValue2*(y : INTEGER; value2 : INTEGER);
+
+  BEGIN
+    symbols[y].value2 := value2
+  END SymbolValue2;
+
+
+PROCEDURE SymbolType*(y : INTEGER; type : INTEGER);
+
+  BEGIN
+    symbols[y].type := type
+  END SymbolType;
+
+
+PROCEDURE SymbolNext*(y : INTEGER; next : INTEGER);
+
+  BEGIN
+    symbols[y].next := next
+  END SymbolNext;
+
+
+PROCEDURE SymbolScope*(y : INTEGER; scope : INTEGER);
+
+  BEGIN
+    symbols[y].scope := scope
+  END SymbolScope;
+
+
+PROCEDURE PopTopScope*;
+
+  BEGIN
+    topScope := symbols[topScope].scope
+  END PopTopScope;
+
+
+PROCEDURE DeallocScope*(scope : INTEGER; keepPublics : BOOLEAN);
+
+  VAR y : INTEGER; yNext : INTEGER; yPrev : INTEGER;
+
+
+  PROCEDURE symbol(yIx : INTEGER; VAR y : Symbol; keepPublics : BOOLEAN);
+
+
+    PROCEDURE type(t : INTEGER; keepPublics : BOOLEAN);
+
+      BEGIN
+        IF ~keepPublics & (types[t].form = FormArray) THEN
+          IF types[types[t].value].link = -1 THEN
+            type(types[t].value, keepPublics)
+          END;
+          types[t].link := freeTypes; freeTypes := t
+        ELSIF types[t].form = FormRecord THEN
+          DeallocScope(types[t].value, keepPublics);
+          IF ~keepPublics THEN
+            types[t].link := freeTypes; freeTypes := t
+          END
+        END
+      END type;
+
+
+    BEGIN (* symbol *)
+      IF (y.type >= 0) &
+         ((types[y.type].link = yIx) OR (types[y.type].link = -1)) THEN
+        type(y.type, keepPublics)
+      END;
+      IF ~keepPublics & (y.class = ClassProc) THEN
+        DeallocScope(y.scope, FALSE)
+      END
+    END symbol;
+
+
+  BEGIN (* DeallocScope *)
+    y := scope; yPrev := -1;
+    WHILE y # Marker DO
+      symbol(y, symbols[y], keepPublics);
+      yNext := symbols[y].next;
+      IF keepPublics &
+         ((symbols[y].class = ClassScope) OR symbols[y].public) THEN
+        yPrev := y; y := yNext
+      ELSE
+        IF yPrev # -1 THEN
+          symbols[yPrev].next := yNext
+        END;
+        symbols[y].next := freeSymbols;
+        freeSymbols := y;
+        y := yNext
+      END
+    END
+  END DeallocScope;
+
+
+PROCEDURE InitUniverse*(VAR s : Scanner.Source);
+
+  VAR y : INTEGER;
+
+
+  PROCEDURE enter(VAR s : Scanner.Source; VAR y : INTEGER; len : INTEGER;
+                  chars1 : INTEGER; chars2 : INTEGER;
+                  class : INTEGER; value : INTEGER; type : INTEGER);
+
+
+    PROCEDURE enterChars(ix : INTEGER; chars : INTEGER);
+
+      BEGIN
+        IF chars > 0 THEN
+          enterChars(ix + 1, chars DIV 256);
+          symbols[Marker].name.data[ix] := CHR(chars MOD 256)
+        END
+      END enterChars;
+
+
+    BEGIN (* enter *)
+      enterChars(0, chars1); enterChars(4, chars2);
+      symbols[Marker].name.len := len;
+      AllocSymbol(s, class, 0);
+      symbols[y].next := allocSymbol;
+      y := allocSymbol;
+      symbols[y].value := value;
+      symbols[y].type := type
+    END enter;
+
+
+  BEGIN (* InitUniverse *)
+    AllocType(s, boolType, FormBool, 1, -1);
+    AllocType(s, charType, FormChar, 1, -1);
+    AllocType(s, intType, FormInt, 4, -1);
+    y := topScope;
+    enter(s, y, 7, 4C4F4F42H, 4E4145H, ClassType, 0, boolType); (* BOOLEAN*)
+    enter(s, y, 4, 52414843H, 0, ClassType, 0, charType); (* CHAR *)
+    enter(s, y, 7, 45544E49H, 524547H, ClassType, 0, intType); (* INTEGER *)
+    enter(s, y, 4, 52444441H, 0, ClassFunc, 1, intType); (* ADDR *)
+    enter(s, y, 3, 524843H, 0, ClassFunc, 2, charType); (* CHR *)
+    enter(s, y, 3, 44524FH, 0, ClassFunc, 3, intType)  (* ORD *)
+  END InitUniverse;
+
+
+END NPC01Y.

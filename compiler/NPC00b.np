@@ -1555,8 +1555,6 @@ PROCEDURE parse;
 
   PROCEDURE identUse(VAR s : Source; VAR y : INTEGER);
 
-    VAR scope : INTEGER;
-
 
     PROCEDURE checkLevel(VAR s : Source; VAR y : Symbol);
 

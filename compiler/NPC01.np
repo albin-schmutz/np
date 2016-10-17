@@ -1,19 +1,11 @@
 MODULE NPC01;
 
-IMPORT Sys, Buf, Base := NPC01B, Scanner := NPC01S;
+IMPORT Sys, Buf, Base := NPC01B, Scanner := NPC01S, STable := NPC01Y;
 
 
 CONST
 
-  MaxTypes = 20; MaxSymbols = 600;
-  Marker = MaxSymbols - 1;
-
-  ClassScope = 1; ClassModule = 2; ClassQual = 3; ClassConst = 4;
-  ClassType = 5; ClassVar = 6; ClassProc = 7; ClassField = 8; ClassFunc = 9;
-
   ModeReg = 10; ModeCond = 11;
-
-  FormBool = 1; FormChar = 2; FormInt = 3; FormArray = 8; FormRecord = 9;
 
   RegGP = 11; (* global pointer *)
   RegFP = 12; (* frame pointer *)
@@ -31,34 +23,6 @@ CONST
 
 TYPE
 
-  Type = RECORD
-    form : INTEGER;
-    size : INTEGER;
-    len : INTEGER;
-    value : INTEGER; (* - array: base type
-                        - record: scope *)
-    link: INTEGER (* - owner symbol (allocated) or
-                     - next in free list (deallocated),
-                     - -1 = NIL *)
-  END;
-
-  Symbol = RECORD
-    name : Scanner.Ident;
-    public : BOOLEAN;
-    level : INTEGER;
-    class : INTEGER;
-    type : INTEGER;
-    scope : INTEGER; (* parent scope *)
-    value : INTEGER; (* - const or address
-                        - ClassModule 0 if not yet compiled
-                        - ClassQual import, ref to module *)
-    value2 : INTEGER; (* - deref level for VAR params or
-                         - forward address for ClassProc
-                         - next module *)
-    next: INTEGER (* - next in scope (allocated) or
-                     - free list (deallocated),
-                     - -1 = NIL *)
-  END;
 
   Gen = RECORD
     mode : INTEGER;
@@ -77,253 +41,12 @@ VAR
 
   code : ARRAY 10000 OF INTEGER;
   source : Scanner.Source; (* root module *)
-  types : ARRAY MaxTypes OF Type;
-  freeTypes : INTEGER; (* first type of free type list *)
-  symbols : ARRAY MaxSymbols OF Symbol;
-  freeSymbols : INTEGER; (* first symbol of free symbol list *)
-  allocSymbol : INTEGER; (* last allocated symbol *)
-  topScope : INTEGER; (* top symbol of scope stack *)
-  modules : INTEGER; (* linked list of module symbols *)
   level : INTEGER; (* level of nested procedures *)
-  boolType : INTEGER; charType : INTEGER; intType : INTEGER;
+  modules : INTEGER; (* linked list of module symbols *)
   varsize : INTEGER;
   regs : ARRAY RegGP OF BOOLEAN;
   pc : INTEGER; (* program counter *)
   entrypoint : INTEGER;
-
-
-(* symbol tables *)
-
-
-PROCEDURE STableInitialize;
-
-  VAR i : INTEGER;
-
-  BEGIN
-    i := 0;
-    WHILE i < MaxTypes DO
-      types[i].form := 0;
-      types[i].size := 0;
-      types[i].len := 0;
-      types[i].value := -1;
-      types[i].link := i + 1;
-      i := i + 1
-    END;
-    types[i - 1].link := -1;
-    freeTypes := 0;
-    i := 0;
-    WHILE i < MaxSymbols DO
-      symbols[i].name.len := 0;
-      symbols[i].level := 0;
-      symbols[i].class := 0;
-      symbols[i].type := -1;
-      symbols[i].scope := -1;
-      symbols[i].value := 0;
-      symbols[i].value2 := 0;
-      symbols[i].next := i + 1;
-      i := i + 1
-    END;
-    symbols[Marker].next := -1;
-    freeSymbols := 0;
-    topScope := -1
-  END STableInitialize;
-
-
-PROCEDURE STableAllocType(VAR s : Scanner.Source; VAR t : INTEGER;
-                          form : INTEGER; size: INTEGER; link : INTEGER);
-
-  BEGIN
-    IF freeTypes # -1 THEN
-      types[freeTypes].form := form;
-      types[freeTypes].size := size;
-      types[freeTypes].len := 0;
-      types[freeTypes].value := -1;
-      t := freeTypes;
-      freeTypes := types[t].link;
-      types[t].link := link
-    ELSE
-      Scanner.RaiseError(s, Base.ErrOutOfMemTypes)
-    END
-  END STableAllocType;
-
-
-PROCEDURE STableCompIdent(VAR eq : BOOLEAN;
-                          VAR i1 : Scanner.Ident;
-                          VAR i2 : Scanner.Ident);
-
-  VAR i : INTEGER;
-
-  BEGIN
-    IF i1.len # i2.len THEN
-      eq := FALSE
-    ELSE
-      i := 0; eq := TRUE;
-      WHILE i < i1.len DO
-        IF i1.data[i] = i2.data[i] THEN
-          i := i + 1
-        ELSE
-          i := i1.len;
-          eq := FALSE
-        END
-      END
-    END
-  END STableCompIdent;
-
-
-PROCEDURE STableCopyIdent(VAR trg : Scanner.Ident; VAR src : Scanner.Ident);
-
-  VAR i : INTEGER;
-
-  BEGIN
-    trg.len := src.len; i := 0;
-    WHILE i < src.len DO
-      trg.data[i] := src.data[i]; i := i + 1
-    END
-  END STableCopyIdent;
-
-
-PROCEDURE STableAllocSymbol(VAR s : Scanner.Source; class : INTEGER);
-
-  BEGIN
-    IF freeSymbols # Marker THEN
-      IF class = ClassScope THEN
-        symbols[freeSymbols].name.len := 0;
-        symbols[freeSymbols].scope := topScope;
-        topScope := freeSymbols
-      ELSE
-        STableCopyIdent(symbols[freeSymbols].name, symbols[Marker].name);
-        symbols[freeSymbols].scope := -1
-      END;
-      symbols[freeSymbols].public := FALSE;
-      symbols[freeSymbols].level := level;
-      symbols[freeSymbols].class := class;
-      symbols[freeSymbols].type := -1;
-      symbols[freeSymbols].value := 0;
-      symbols[freeSymbols].value2 := 0;
-      allocSymbol := freeSymbols;
-      freeSymbols := symbols[allocSymbol].next;
-      symbols[allocSymbol].next := Marker
-    ELSE
-      Scanner.RaiseError(s, Base.ErrOutOfMemSymbols)
-    END
-  END STableAllocSymbol;
-
-
-PROCEDURE STableFindSymbol(VAR y : INTEGER; scope : INTEGER);
-
-  VAR eq : BOOLEAN;
-
-  BEGIN
-    y := scope;
-    STableCompIdent(eq,
-      symbols[symbols[y].next].name, symbols[Marker].name);
-    WHILE ~eq DO
-      y := symbols[y].next;
-      STableCompIdent(eq,
-        symbols[symbols[y].next].name, symbols[Marker].name)
-    END
-  END STableFindSymbol;
-
-
-PROCEDURE STableDeallocScope(scope : INTEGER; keepPublics : BOOLEAN);
-
-  VAR y : INTEGER; yNext : INTEGER; yPrev : INTEGER;
-
-
-  PROCEDURE symbol(yIx : INTEGER; VAR y : Symbol; keepPublics : BOOLEAN);
-
-
-    PROCEDURE type(t : INTEGER; keepPublics : BOOLEAN);
-
-      BEGIN
-        IF ~keepPublics & (types[t].form = FormArray) THEN
-          IF types[types[t].value].link = -1 THEN
-            type(types[t].value, keepPublics)
-          END;
-          types[t].link := freeTypes; freeTypes := t
-        ELSIF types[t].form = FormRecord THEN
-          STableDeallocScope(types[t].value, keepPublics);
-          IF ~keepPublics THEN
-            types[t].link := freeTypes; freeTypes := t
-          END
-        END
-      END type;
-
-
-    BEGIN (* symbol *)
-      IF (y.type >= 0) &
-         ((types[y.type].link = yIx) OR (types[y.type].link = -1)) THEN
-        type(y.type, keepPublics)
-      END;
-      IF ~keepPublics & (y.class = ClassProc) THEN
-        STableDeallocScope(y.scope, FALSE)
-      END
-    END symbol;
-
-
-  BEGIN (* STableDeallocScope *)
-    y := scope; yPrev := -1;
-    WHILE y # Marker DO
-      symbol(y, symbols[y], keepPublics);
-      yNext := symbols[y].next;
-      IF keepPublics &
-         ((symbols[y].class = ClassScope) OR symbols[y].public) THEN
-        yPrev := y; y := yNext
-      ELSE
-        IF yPrev # -1 THEN
-          symbols[yPrev].next := yNext
-        END;
-        symbols[y].next := freeSymbols;
-        freeSymbols := y;
-        y := yNext
-      END
-    END
-  END STableDeallocScope;
-
-
-PROCEDURE STableInitUniverse;
-
-  VAR y : INTEGER;
-
-
-  PROCEDURE enter(VAR s : Scanner.Source; VAR y : INTEGER; len : INTEGER;
-                  chars1 : INTEGER; chars2 : INTEGER;
-                  class : INTEGER; value : INTEGER; type : INTEGER);
-
-
-    PROCEDURE enterChars(ix : INTEGER; chars : INTEGER);
-
-      BEGIN
-        IF chars > 0 THEN
-          enterChars(ix + 1, chars DIV 256);
-          symbols[Marker].name.data[ix] := CHR(chars MOD 256)
-        END
-      END enterChars;
-
-
-    BEGIN (* enter *)
-      enterChars(0, chars1); enterChars(4, chars2);
-      symbols[Marker].name.len := len;
-      STableAllocSymbol(s, class);
-      symbols[y].next := allocSymbol;
-      y := allocSymbol;
-      symbols[y].value := value;
-      symbols[y].type := type
-    END enter;
-
-
-  BEGIN (* STableInitUniverse *)
-    STableAllocType(source, boolType, FormBool, 1, -1);
-    STableAllocType(source, charType, FormChar, 1, -1);
-    STableAllocType(source, intType, FormInt, 4, -1);
-    y := topScope;
-    enter(source, y, 7, 4C4F4F42H, 4E4145H, ClassType, 0, boolType); (* BOOLEAN*)
-    enter(source, y, 4, 52414843H, 0, ClassType, 0, charType); (* CHAR *)
-    enter(source, y, 7, 45544E49H, 524547H, ClassType, 0, intType); (* INTEGER *)
-    enter(source, y, 4, 52444441H, 0, ClassFunc, 1, intType); (* ADDR *)
-    enter(source, y, 3, 524843H, 0, ClassFunc, 2, charType); (* CHR *)
-    enter(source, y, 3, 44524FH, 0, ClassFunc, 3, intType)  (* ORD *)
-  END STableInitUniverse;
 
 
 (* generator *)
@@ -542,14 +265,15 @@ PROCEDURE GenReturn(parsize : INTEGER);
   END GenReturn;
 
 
-PROCEDURE GenMake(VAR s : Scanner.Source; VAR g : Gen; VAR y : Symbol);
+PROCEDURE GenMake(VAR s : Scanner.Source; VAR g : Gen;
+                  VAR y : STable.Symbol);
 
   VAR r : INTEGER;
 
   BEGIN
     g.mode := y.class;
     g.type := y.type;
-    g.size := types[y.type].size;
+    g.size := STable.types[y.type].size;
     g.level := y.level;
     g.addr1 := y.value;
     g.addr2 := y.value2;
@@ -575,10 +299,10 @@ PROCEDURE GenLoad(VAR s : Scanner.Source; VAR g : Gen);
 
   BEGIN
     IF g.mode # ModeReg THEN
-      IF g.mode = ClassConst THEN
+      IF g.mode = STable.ClassConst THEN
         GenAllocReg(s, g.reg);
         GenEmitOc3(OcMOVI, g.reg, 0, g.addr1)
-      ELSIF g.mode = ClassVar THEN
+      ELSIF g.mode = STable.ClassVar THEN
         GenAllocReg(s, r);
         IF g.size = 1 THEN
           GenEmitOc3(OcLDB, r, g.reg, g.addr1)
@@ -648,7 +372,7 @@ PROCEDURE GenParam(VAR s : Scanner.Source; VAR g : Gen; isRef : BOOLEAN);
 
   BEGIN
     IF isRef THEN (* ref param *)
-      IF g.mode = ClassVar THEN
+      IF g.mode = STable.ClassVar THEN
         IF g.addr1 = 0 (* -->GenMake *) THEN
           r := g.reg
         ELSE
@@ -669,7 +393,7 @@ PROCEDURE GenParam(VAR s : Scanner.Source; VAR g : Gen; isRef : BOOLEAN);
   END GenParam;
 
 
-PROCEDURE GenField(VAR g : Gen; VAR y : Symbol);
+PROCEDURE GenField(VAR g : Gen; VAR y : STable.Symbol);
 
   BEGIN
     g.addr1 := g.addr1 + y.value
@@ -681,10 +405,10 @@ PROCEDURE GenIndex(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
   VAR size : INTEGER;
 
   BEGIN
-    size := types[types[g.type].value].size;
-    IF g2.mode = ClassConst THEN
+    size := STable.types[STable.types[g.type].value].size;
+    IF g2.mode = STable.ClassConst THEN
       IF (g2.addr1 >= 0) &
-         (g2.addr1 < types[g.type].len) THEN
+         (g2.addr1 < STable.types[g.type].len) THEN
         g.addr1 := g.addr1 + g2.addr1 * size
       ELSE
         Scanner.RaiseError(s, Base.ErrBadIndex)
@@ -705,7 +429,7 @@ PROCEDURE GenOp(VAR s : Scanner.Source; op : INTEGER; VAR g : Gen; VAR g2 : Gen)
 
   BEGIN
     GenLoad(s, g);
-    IF g2.mode = ClassConst THEN
+    IF g2.mode = STable.ClassConst THEN
       GenEmitOc3(op + 8, g.reg, g.reg, g2.addr1)
     ELSE
       GenLoad(s, g2);
@@ -721,12 +445,12 @@ PROCEDURE GenOp1(VAR s : Scanner.Source; VAR g : Gen; op : INTEGER);
 
   BEGIN
     IF op = Scanner.TokMinus THEN
-      IF g.mode = ClassVar THEN
+      IF g.mode = STable.ClassVar THEN
         GenLoad(s, g)
       END;
       GenEmitOc3(OcMVN, g.reg, 0, g.reg)
     ELSIF op = Scanner.TokTilde THEN
-      IF g.mode = ClassConst THEN
+      IF g.mode = STable.ClassConst THEN
         IF g.addr1 = 1 THEN g.addr1 := 0 ELSE g.addr1 := 1 END
       ELSE
         GenLoadCond(s, g); GenNegCond(g.cond);
@@ -753,15 +477,15 @@ PROCEDURE GenOp1(VAR s : Scanner.Source; VAR g : Gen; op : INTEGER);
 PROCEDURE GenOp2(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen; op : INTEGER);
 
   BEGIN
-    IF types[g.type].form = FormInt THEN
+    IF STable.types[g.type].form = STable.FormInt THEN
       IF op = Scanner.TokAsterisk THEN GenOp(s, OcMUL, g, g2)
       ELSIF op = Scanner.TokDiv THEN GenOp(s, OcDIV, g, g2)
       ELSIF op = Scanner.TokMod THEN GenOp(s, OcMOD, g, g2)
       ELSIF op = Scanner.TokPlus THEN GenOp(s, OcADD, g, g2)
       ELSIF op = Scanner.TokMinus THEN GenOp(s, OcSUB, g, g2)
       END
-    ELSE (* FormBool *)
-      IF (g.mode = ClassConst) & (g2.mode = ClassConst) THEN
+    ELSE (* STable.FormBool *)
+      IF (g.mode = STable.ClassConst) & (g2.mode = STable.ClassConst) THEN
         IF op = Scanner.TokOr THEN
           IF (g.addr1 = 1) OR (g2.addr1 = 1) THEN
             g.addr1 := 1
@@ -822,7 +546,7 @@ PROCEDURE GenAddr(VAR s : Scanner.Source; VAR g : Gen);
   VAR r : INTEGER;
 
   BEGIN
-    IF g.mode = ClassVar THEN
+    IF g.mode = STable.ClassVar THEN
       IF g.addr1 # 0 (* -->GenMake *) THEN
         GenAllocReg(s, r);
         GenEmitOc3(OcADDI, r, g.reg, g.addr1);
@@ -878,7 +602,7 @@ PROCEDURE parse;
   PROCEDURE checkBool(VAR s : Scanner.Source; VAR g : Gen);
 
     BEGIN
-      IF types[g.type].form # FormBool THEN
+      IF STable.types[g.type].form # STable.FormBool THEN
         Scanner.RaiseError(s, Base.ErrBoolExp)
       END
     END checkBool;
@@ -887,7 +611,7 @@ PROCEDURE parse;
   PROCEDURE checkChar(VAR s : Scanner.Source; VAR g : Gen);
 
     BEGIN
-      IF types[g.type].form # FormChar THEN
+      IF STable.types[g.type].form # STable.FormChar THEN
         Scanner.RaiseError(s, Base.ErrCharExp)
       END
     END checkChar;
@@ -896,7 +620,7 @@ PROCEDURE parse;
   PROCEDURE checkInt(VAR s : Scanner.Source; VAR g : Gen);
 
     BEGIN
-      IF types[g.type].form # FormInt THEN
+      IF STable.types[g.type].form # STable.FormInt THEN
         Scanner.RaiseError(s, Base.ErrIntExp)
       END
     END checkInt;
@@ -907,15 +631,15 @@ PROCEDURE parse;
 
     BEGIN
       accept(s, Scanner.TokIdent);
-      STableCopyIdent(symbols[Marker].name, s.ident);
-      STableFindSymbol(y, topScope);
-      IF symbols[y].next = Marker THEN
-        STableAllocSymbol(s, class);
-        symbols[y].next := allocSymbol;
-        y := allocSymbol;
+      STable.CopyIdent(STable.symbols[STable.Marker].name, s.ident);
+      STable.FindSymbol(y, STable.topScope);
+      IF STable.symbols[y].next = STable.Marker THEN
+        STable.AllocSymbol(s, class, level);
+        STable.SymbolNext(y, STable.allocSymbol);
+        y := STable.allocSymbol;
         Scanner.Next(s);
         IF s.token = Scanner.TokAsterisk THEN
-          symbols[y].public := TRUE; Scanner.Next(s)
+          STable.SymbolPublic(y); Scanner.Next(s)
         END
       ELSE
         Scanner.RaiseError(s, Base.ErrMultipleDef)
@@ -925,15 +649,13 @@ PROCEDURE parse;
 
   PROCEDURE identUse(VAR s : Scanner.Source; VAR y : INTEGER);
 
-    VAR scope : INTEGER;
 
-
-    PROCEDURE checkLevel(VAR s : Scanner.Source; VAR y : Symbol);
+    PROCEDURE checkLevel(VAR s : Scanner.Source; VAR y : STable.Symbol);
 
       BEGIN
         IF (y.level # 0) &
            (y.level # level) &
-           (y.class = ClassVar) THEN
+           (y.class = STable.ClassVar) THEN
           Scanner.RaiseError(s, Base.ErrIdentUndef)
         END
       END checkLevel;
@@ -943,17 +665,17 @@ PROCEDURE parse;
                      scope : INTEGER; VAR ident : Scanner.Ident);
 
       BEGIN
-        STableCopyIdent(symbols[Marker].name, ident);
+        STable.CopyIdent(STable.symbols[STable.Marker].name, ident);
         WHILE scope # -1 DO
-          STableFindSymbol(y, scope);
-          IF symbols[y].next # Marker THEN
+          STable.FindSymbol(y, scope);
+          IF STable.symbols[y].next # STable.Marker THEN
             scope := -1
           ELSE
-            scope := symbols[scope].scope
+            scope := STable.symbols[scope].scope
           END
         END;
-        IF symbols[y].next # Marker THEN
-          y := symbols[y].next
+        IF STable.symbols[y].next # STable.Marker THEN
+          y := STable.symbols[y].next
         ELSE
           Scanner.RaiseError(s, Base.ErrIdentUndef)
         END
@@ -961,13 +683,13 @@ PROCEDURE parse;
 
 
     BEGIN (* identUse *)
-      search(s, y, topScope, s.ident);
-      IF symbols[y].class = ClassQual THEN
+      search(s, y, STable.topScope, s.ident);
+      IF STable.symbols[y].class = STable.ClassQual THEN
         Scanner.Next(s); accept(s, Scanner.TokDot); 
         Scanner.Next(s); accept(s, Scanner.TokIdent); 
-        search(s, y, symbols[y].value, s.ident)
+        search(s, y, STable.symbols[y].value, s.ident)
       END;
-      checkLevel(s, symbols[y])
+      checkLevel(s, STable.symbols[y])
     END identUse;
 
 
@@ -980,7 +702,7 @@ PROCEDURE parse;
 
       BEGIN
         IF op = Scanner.TokMinus THEN
-          IF g.mode = ClassConst THEN
+          IF g.mode = STable.ClassConst THEN
             IF g.addr1 # Sys.MinInt THEN
               g.addr1 := -g.addr1
             ELSE
@@ -1068,8 +790,8 @@ PROCEDURE parse;
 
 
       BEGIN (* Op2 *)
-        IF types[g.type].form = FormInt THEN
-          IF (g.mode = ClassConst) & (g2.mode = ClassConst) THEN
+        IF STable.types[g.type].form = STable.FormInt THEN
+          IF (g.mode = STable.ClassConst) & (g2.mode = STable.ClassConst) THEN
             IF op = Scanner.TokAsterisk THEN mul(s, g, g2)
             ELSIF op = Scanner.TokDiv THEN div(s, g, g2)
             ELSIF op = Scanner.TokMod THEN mod(s, g, g2)
@@ -1108,28 +830,28 @@ PROCEDURE parse;
               WHILE (s.token = Scanner.TokBrackL) OR
                     (s.token = Scanner.TokDot) DO
                 IF s.token = Scanner.TokBrackL THEN
-                  IF types[g.type].form = FormArray THEN
+                  IF STable.types[g.type].form = STable.FormArray THEN
                     Scanner.Next(s);
                     g2.expConst := FALSE;
                     expr(s, g2);
                     checkInt(s, g2);
                     GenIndex(s, g, g2);
                     accept(s, Scanner.TokBrackR);
-                    g.type := types[g.type].value;
-                    g.size := types[g.type].size
+                    g.type := STable.types[g.type].value;
+                    g.size := STable.types[g.type].size
                   ELSE
                     Scanner.RaiseError(s, Base.ErrArrayExp)
                   END
                 ELSE
-                  IF types[g.type].form = FormRecord THEN
+                  IF STable.types[g.type].form = STable.FormRecord THEN
                     Scanner.Next(s); accept(s, Scanner.TokIdent);
-                    STableCopyIdent(symbols[Marker].name, s.ident);
-                    STableFindSymbol(y, types[g.type].value);
-                    y := symbols[y].next;
-                    IF y # Marker THEN
-                      g.type := symbols[y].type;
-                      g.size := types[symbols[y].type].size;
-                      GenField(g, symbols[y])
+                    STable.CopyIdent(STable.symbols[STable.Marker].name, s.ident);
+                    STable.FindSymbol(y, STable.types[g.type].value);
+                    y := STable.symbols[y].next;
+                    IF y # STable.Marker THEN
+                      g.type := STable.symbols[y].type;
+                      g.size := STable.types[STable.symbols[y].type].size;
+                      GenField(g, STable.symbols[y])
                     ELSE
                       Scanner.RaiseError(s, Base.ErrIdentUndef)
                     END
@@ -1142,7 +864,7 @@ PROCEDURE parse;
             END selector;
 
 
-          PROCEDURE stdFunc(VAR s : Scanner.Source; VAR g : Gen; VAR y : Symbol);
+          PROCEDURE stdFunc(VAR s : Scanner.Source; VAR g : Gen; VAR y : STable.Symbol);
 
             BEGIN
               Scanner.Next(s);
@@ -1152,13 +874,13 @@ PROCEDURE parse;
               expr(s, g);
               IF y.value = 1 (* ADDR *) THEN
                 GenAddr(s, g);
-                g.type := intType
+                g.type := STable.intType
               ELSIF y.value = 2 (* CHR *) THEN
                 checkInt(s, g);
-                g.type := charType
+                g.type := STable.charType
               ELSIF y.value = 3 (* ORD *) THEN
                 checkChar(s, g);
-                g.type := intType
+                g.type := STable.intType
               END;
               accept(s, Scanner.TokParenR);
               Scanner.Next(s)
@@ -1167,31 +889,31 @@ PROCEDURE parse;
 
           BEGIN (* factor *)
             IF s.token = Scanner.TokChar THEN
-              g.mode := ClassConst;
-              g.type := charType;
+              g.mode := STable.ClassConst;
+              g.type := STable.charType;
               g.addr1 := s.value;
               Scanner.Next(s)
             ELSIF s.token = Scanner.TokInt THEN
-              g.mode := ClassConst;
-              g.type := intType;
+              g.mode := STable.ClassConst;
+              g.type := STable.intType;
               g.addr1 := s.value;
               Scanner.Next(s)
             ELSIF s.token = Scanner.TokFalse THEN
-              g.mode := ClassConst;
-              g.type := boolType;
+              g.mode := STable.ClassConst;
+              g.type := STable.boolType;
               g.addr1 := 0;
               Scanner.Next(s)
             ELSIF s.token = Scanner.TokTrue THEN
-              g.mode := ClassConst;
-              g.type := boolType;
+              g.mode := STable.ClassConst;
+              g.type := STable.boolType;
               g.addr1 := 1;
               Scanner.Next(s)
             ELSIF s.token = Scanner.TokIdent THEN
               identUse(s, y);
-              IF symbols[y].class = ClassFunc THEN
-                stdFunc(s, g, symbols[y])
+              IF STable.symbols[y].class = STable.ClassFunc THEN
+                stdFunc(s, g, STable.symbols[y])
               ELSE
-                GenMake(s, g, symbols[y]);
+                GenMake(s, g, STable.symbols[y]);
                 Scanner.Next(s);
                 selector(s, g)
               END
@@ -1283,8 +1005,8 @@ PROCEDURE parse;
           simpleExpr(s, g2);
           IF g.type = g2.type THEN
             GenRel(s, g, g2, op);
-            g.type := boolType;
-            g.size := types[boolType].size
+            g.type := STable.boolType;
+            g.size := STable.types[STable.boolType].size
           ELSE
             Scanner.RaiseError(s, Base.ErrIncompTypes)
           END
@@ -1318,12 +1040,13 @@ PROCEDURE parse;
 
       BEGIN
         Scanner.Next(s);
-        STableAllocType(s, t, FormArray, 0, link);
-        constExpr(s, types[t].len);
+        STable.AllocType(s, t, STable.FormArray, 0, link);
+        constExpr(s, STable.types[t].len);
         accept(s, Scanner.TokOf);
         Scanner.Next(s);
-        typeDef(s, y, types[t].value, 0);
-        types[t].size := types[t].len * types[types[t].value].size
+        typeDef(s, y, STable.types[t].value, 0);
+        STable.TypeSize(t, STable.types[t].len *
+          STable.types[STable.types[t].value].size)
       END array;
 
 
@@ -1337,26 +1060,26 @@ PROCEDURE parse;
         VAR y : INTEGER;
 
         BEGIN
-          typeDef(s, y, t, ClassField);
-          symbols[y].value := addr;
-          addr := addr + types[t].size;
+          typeDef(s, y, t, STable.ClassField);
+          STable.SymbolValue(y, addr);
+          addr := addr + STable.types[t].size;
           GenAlign(addr)
         END field;
 
 
       BEGIN (* record *)
         addr := 0;
-        STableAllocSymbol(s, ClassScope);
+        STable.AllocSymbol(s, STable.ClassScope, level);
         Scanner.Next(s);
         field(s, t, addr);
         WHILE s.token = Scanner.TokSemic DO
           Scanner.Next(s); field(s, t, addr)
         END;
         accept(s, Scanner.TokEnd);
-        STableAllocType(s, t, FormRecord, 0, link);
-        types[t].size := addr;
-        types[t].value := topScope;
-        topScope := symbols[topScope].scope;
+        STable.AllocType(s, t, STable.FormRecord, 0, link);
+        STable.TypeSize(t, addr);
+        STable.TypeValue(t, STable.topScope);
+        STable.PopTopScope;
         Scanner.Next(s)
       END record;
 
@@ -1365,7 +1088,7 @@ PROCEDURE parse;
       link := -1;
       IF class # 0 THEN
         identDef(s, y, class);
-        IF class = ClassType THEN
+        IF class = STable.ClassType THEN
           link := y;
           accept(s, Scanner.TokEq)
         ELSE
@@ -1378,7 +1101,7 @@ PROCEDURE parse;
         IF (class # 0) & (y = y2) THEN
           Scanner.RaiseError(s, Base.ErrIdentUndef)
         END;
-        t := symbols[y2].type;
+        t := STable.symbols[y2].type;
         Scanner.Next(s)
       ELSIF s.token = Scanner.TokArray THEN
         array(s, t, link)
@@ -1388,7 +1111,7 @@ PROCEDURE parse;
         Scanner.RaiseError(s, Base.ErrTypeExp)
       END;
       IF class # 0 THEN
-        symbols[y].type := t
+        STable.SymbolType(y, t)
       END
     END typeDef;
 
@@ -1412,7 +1135,7 @@ PROCEDURE parse;
           g.expConst := FALSE;
           expr(s, g);
           checkInt(s, g);
-          IF g.mode = ClassVar THEN
+          IF g.mode = STable.ClassVar THEN
             accept(s, Scanner.TokComma); Scanner.Next(s);
             g2.expConst := FALSE;
             expr(s, g2);
@@ -1431,7 +1154,7 @@ PROCEDURE parse;
 
         BEGIN
           expr(s, g);
-          IF g.mode = ClassVar THEN
+          IF g.mode = STable.ClassVar THEN
             accept(s, Scanner.TokAssign); Scanner.Next(s);
             g2.expConst := FALSE;
             expr(s, g2);
@@ -1446,7 +1169,7 @@ PROCEDURE parse;
         END assign;
 
 
-      PROCEDURE call(VAR s : Scanner.Source; VAR proc : Symbol);
+      PROCEDURE call(VAR s : Scanner.Source; VAR proc : STable.Symbol);
 
         VAR y : INTEGER;
 
@@ -1458,21 +1181,21 @@ PROCEDURE parse;
           BEGIN
             g.expConst := FALSE;
             expr(s, g);
-            IF (y # Marker) & (symbols[y].value > 0) THEN
-              IF symbols[y].type = g.type THEN
-                GenParam(s, g, symbols[y].value2 = 1)
+            IF (y # STable.Marker) & (STable.symbols[y].value > 0) THEN
+              IF STable.symbols[y].type = g.type THEN
+                GenParam(s, g, STable.symbols[y].value2 = 1)
               ELSE
                 Scanner.RaiseError(s, Base.ErrIncompTypes)
               END
             ELSE
               Scanner.RaiseError(s, Base.ErrParamsTooMany)
             END;
-            y := symbols[y].next
+            y := STable.symbols[y].next
           END param;
 
 
         BEGIN (* call *)
-          y := symbols[proc.scope].next;
+          y := STable.symbols[proc.scope].next;
           Scanner.Next(s);
           IF s.token = Scanner.TokParenL THEN
             Scanner.Next(s); param(s, y);
@@ -1481,7 +1204,7 @@ PROCEDURE parse;
             END;
             accept(s, Scanner.TokParenR); Scanner.Next(s)
           END;
-          IF (y = Marker) OR (symbols[y].value < 0) THEN
+          IF (y = STable.Marker) OR (STable.symbols[y].value < 0) THEN
             IF proc.value = Sys.MinInt THEN (* forward call *)
               GenFCall(proc.value2)
             ELSE (* backward call *)
@@ -1548,8 +1271,8 @@ PROCEDURE parse;
       BEGIN (* stmt *)
         IF s.token = Scanner.TokIdent THEN
           identUse(s, y);
-          IF symbols[y].class = ClassProc THEN
-            call(s, symbols[y])
+          IF STable.symbols[y].class = STable.ClassProc THEN
+            call(s, STable.symbols[y])
           ELSE
             assign(s)
           END
@@ -1583,9 +1306,9 @@ PROCEDURE parse;
 
       BEGIN
         WHILE s.token = Scanner.TokIdent DO
-          identDef(s, y, ClassConst); accept(s, Scanner.TokEq);
-          Scanner.Next(s); constExpr(s, symbols[y].value);
-          symbols[y].type := intType;
+          identDef(s, y, STable.ClassConst); accept(s, Scanner.TokEq);
+          Scanner.Next(s); constExpr(s, STable.symbols[y].value);
+          STable.SymbolType(y, STable.intType);
           accept(s, Scanner.TokSemic);
           Scanner.Next(s)
         END
@@ -1598,7 +1321,7 @@ PROCEDURE parse;
 
       BEGIN
         WHILE s.token = Scanner.TokIdent DO
-          typeDef(s, y, t, ClassType);
+          typeDef(s, y, t, STable.ClassType);
           accept(s, Scanner.TokSemic); Scanner.Next(s)
         END
       END type;
@@ -1610,11 +1333,11 @@ PROCEDURE parse;
 
       BEGIN
         WHILE s.token = Scanner.TokIdent DO
-          typeDef(s, y, t, ClassVar);
-          size := types[t].size;
+          typeDef(s, y, t, STable.ClassVar);
+          size := STable.types[t].size;
           GenAlign(size);
           addr := addr - size;
-          symbols[y].value := addr;
+          STable.SymbolValue(y, addr);
           accept(s, Scanner.TokSemic); Scanner.Next(s)
         END
       END var;
@@ -1635,14 +1358,14 @@ PROCEDURE parse;
         BEGIN
           IF s.token = Scanner.TokVar THEN
             Scanner.Next(s);
-            typeDef(s, y, t, ClassVar);
-            symbols[y].value2 := 1
+            typeDef(s, y, t, STable.ClassVar);
+            STable.SymbolValue2(y, 1)
           ELSE
-            typeDef(s, y, t, ClassVar);
-            symbols[y].value2 := 0
+            typeDef(s, y, t, STable.ClassVar);
+            STable.SymbolValue2(y, 0)
           END;
-          IF symbols[y].value2 = 0 THEN
-            IF types[t].form >= FormArray THEN
+          IF STable.symbols[y].value2 = 0 THEN
+            IF STable.types[t].form >= STable.FormArray THEN
               Scanner.RaiseError(s, Base.ErrScalarExp)
             END
           END;
@@ -1650,17 +1373,17 @@ PROCEDURE parse;
           IF s.token = Scanner.TokSemic THEN
             Scanner.Next(s); params(s, addr)
           END;
-          symbols[y].value := addr - offs + 8
+          STable.SymbolValue(y, addr - offs + 8)
         END params;
 
 
       BEGIN (* proc *)
-        identDef(s, y, ClassProc);
-        symbols[y].value := Sys.MinInt (* forward call marker *);
-        symbols[y].value2 := 0;
+        identDef(s, y, STable.ClassProc);
+        STable.SymbolValue(y, Sys.MinInt) (* forward call marker *);
+        STable.SymbolValue2(y, 0);
         level := level + 1;
-        STableAllocSymbol(s, ClassScope);
-        symbols[y].scope := allocSymbol;
+        STable.AllocSymbol(s, STable.ClassScope, level);
+        STable.SymbolScope(y, STable.allocSymbol);
         parsize := 0;
         IF s.token = Scanner.TokParenL THEN
           Scanner.Next(s);
@@ -1669,28 +1392,28 @@ PROCEDURE parse;
           END
         END;
         accept(s, Scanner.TokSemic); Scanner.Next(s);
-        lastParam := allocSymbol;
+        lastParam := STable.allocSymbol;
         varsize := 0;
         decls(s, varsize);
-        IF symbols[y].value = Sys.MinInt THEN
-          GenFixLink(-symbols[y].value2)
+        IF STable.symbols[y].value = Sys.MinInt THEN
+          GenFixLink(-STable.symbols[y].value2)
         END;
-        symbols[y].value := -pc;
+        STable.SymbolValue(y, -pc);
         GenEnter(varsize);
         accept(s, Scanner.TokBegin); Scanner.Next(s); stmts(s);
         accept(s, Scanner.TokEnd); Scanner.Next(s); accept(s, Scanner.TokIdent);
-        STableCompIdent(eq, symbols[y].name, s.ident);
+        STable.CompIdent(eq, STable.symbols[y].name, s.ident);
         IF eq THEN
           Scanner.Next(s); accept(s, Scanner.TokSemic); Scanner.Next(s)
         ELSE
           Scanner.RaiseError(s, Base.ErrNameMismatch)
         END;
-        IF symbols[lastParam].next # Marker THEN
-          STableDeallocScope(symbols[lastParam].next, FALSE);
-          symbols[lastParam].next := Marker
+        IF STable.symbols[lastParam].next # STable.Marker THEN
+          STable.DeallocScope(STable.symbols[lastParam].next, FALSE);
+          STable.SymbolNext(lastParam, STable.Marker)
         END;
         GenReturn(parsize);
-        topScope := symbols[topScope].scope;
+        STable.PopTopScope;
         level := level - 1
       END proc;
 
@@ -1735,12 +1458,12 @@ PROCEDURE parse;
           BEGIN
             yModule := modules; eq := FALSE;
             WHILE (yModule # 0) & ~eq DO
-              STableCompIdent(eq, symbols[yModule].name, checkee);
+              STable.CompIdent(eq, STable.symbols[yModule].name, checkee);
               IF ~eq THEN
-                yModule := symbols[yModule].value2
+                yModule := STable.symbols[yModule].value2
               END
             END;
-            IF eq & (symbols[yModule].value = 0) THEN
+            IF eq & (STable.symbols[yModule].value = 0) THEN
               Scanner.RaiseError(s, Base.ErrCyclicImports)
             END
           END checkCyclcImport;
@@ -1754,7 +1477,7 @@ PROCEDURE parse;
               fn[i] := name.data[i]; i := i + 1
             END;
             fn[i] := 2EX; fn[i + 1] := 6EX; fn[i + 2] := 70X; fn[i + 3] := 0X;
-            STableCopyIdent(sNew.name, name);
+            STable.CopyIdent(sNew.name, name);
             Scanner.OpenSource(sNew, ADDR(fn));
             IF sNew.file = 0 THEN
               Scanner.RaiseError(s, Base.ErrOpenFile)
@@ -1769,14 +1492,14 @@ PROCEDURE parse;
         VAR y : INTEGER; yModule : INTEGER;
 
         BEGIN
-          identDef(s, y, ClassQual);
-          symbols[y].public := TRUE;
+          identDef(s, y, STable.ClassQual);
+          STable.SymbolPublic(y);
           IF s.token = Scanner.TokAssign THEN
             Scanner.Next(s); accept(s, Scanner.TokIdent);
-            loadModule(s, symbols[y].value, s.ident);
+            loadModule(s, STable.symbols[y].value, s.ident);
             Scanner.Next(s)
           ELSE
-            loadModule(s, symbols[y].value, symbols[y].name)
+            loadModule(s, STable.symbols[y].value, STable.symbols[y].name)
           END
         END import;
 
@@ -1794,17 +1517,17 @@ PROCEDURE parse;
       Scanner.Next(s); accept(s, Scanner.TokModule);
       Scanner.Next(s); accept(s, Scanner.TokIdent);
       IF source.name.len = 0 THEN
-        STableCopyIdent(s.name, s.ident)
+        STable.CopyIdent(s.name, s.ident)
       ELSE
-        STableCompIdent(eq, s.name, s.ident);
+        STable.CompIdent(eq, s.name, s.ident);
         IF ~eq THEN
           Scanner.RaiseError(s, Base.ErrNameMismatch)
         END
       END;
-      STableAllocSymbol(s, ClassScope);
-      identDef(s, yModule, ClassModule);
-      symbols[yModule].public := TRUE;
-      symbols[yModule].value2 := modules;
+      STable.AllocSymbol(s, STable.ClassScope, level);
+      identDef(s, yModule, STable.ClassModule);
+      STable.SymbolPublic(yModule);
+      STable.SymbolValue2(yModule, modules);
       modules := yModule;
       accept(s, Scanner.TokSemic); Scanner.Next(s);
       IF s.token = Scanner.TokImport THEN
@@ -1813,21 +1536,21 @@ PROCEDURE parse;
       decls(s, varsize);
       entrypoint := pc;
       IF s.token = Scanner.TokBegin THEN
-        IF symbols[yModule].value2 = 0 (* root module *) THEN
+        IF STable.symbols[yModule].value2 = 0 (* root module *) THEN
           Scanner.Next(s); stmts(s)
         ELSE
           Scanner.RaiseError(s, Base.ErrMainNotAllowed)
         END
       END;
       accept(s, Scanner.TokEnd); Scanner.Next(s); accept(s, Scanner.TokIdent);
-      STableCompIdent(eq, symbols[yModule].name, s.ident);
+      STable.CompIdent(eq, STable.symbols[yModule].name, s.ident);
       IF ~eq THEN
         Scanner.RaiseError(s, Base.ErrNameMismatch)
       END;
       Scanner.Next(s); accept(s, Scanner.TokDot);
-      symbols[yModule].value := 1; (* compiled flag *)
-      STableDeallocScope(topScope, symbols[yModule].value2 # 0);
-      topScope := symbols[topScope].scope
+      STable.SymbolValue(yModule, 1); (* compiled flag *)
+      STable.DeallocScope(STable.topScope, STable.symbols[yModule].value2 # 0);
+      STable.PopTopScope
     END module;
 
 
@@ -1843,10 +1566,10 @@ BEGIN
   IF source.file = 0 THEN
     Scanner.RaiseError(source, Base.ErrOpenFile)
   END;
-  Scanner.Initialize; STableInitialize;
-  STableAllocSymbol(source, ClassScope);
-  STableInitUniverse; GenInitRegs; parse;
-  STableDeallocScope(topScope, FALSE) (* universe *);
+  Scanner.Initialize; STable.Initialize;
+  STable.AllocSymbol(source, STable.ClassScope, level);
+  STable.InitUniverse(source); GenInitRegs; parse;
+  STable.DeallocScope(STable.topScope, FALSE) (* universe *);
   Scanner.CloseSource(source);
   GenEmitOc3(OcPOP, RegPC, RegSP, 0);
   GenEmit(varsize); GenEmit(entrypoint * 4);
