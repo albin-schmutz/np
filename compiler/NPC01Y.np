@@ -1,4 +1,4 @@
-MODULE NPC01Y; (* symbol tables *)
+MODULE NPC01Y (* symbol tables *);
 
 
 CONST

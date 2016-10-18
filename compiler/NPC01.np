@@ -1,580 +1,19 @@
-MODULE NPC01;
+MODULE NPC01 (* main parser *);
 
-IMPORT Sys, Buf, Base := NPC01B, Scanner := NPC01S, STable := NPC01Y;
-
-
-CONST
-
-  ModeReg = 10; ModeCond = 11;
-
-  RegGP = 11; (* global pointer *)
-  RegFP = 12; (* frame pointer *)
-  RegSP = 13; (* stack pointer *)
-  RegRT = 14; (* return register *)
-  RegPC = 15; (* program counter *)
-
-  OcMOV = 8; OcMVN = 9; OcCMP = 10; OcMOVI = 16; OcCMPI = 18; 
-  OcMUL = 11; OcDIV = 12; OcMOD = 13; OcADD = 14; OcSUB = 15;
-  OcMULI =19; OcADDI = 22; 
-  OcLDB = 24; OcLDW = 25; OcSTB = 26; OcSTW = 27; OcPOP = 28; OcPSH = 29;
-  OcSYS = 31; OcJUMP = 48; OcCALL = 49;
-  OcBEQ = 50; OcBNE = 51; OcBLS = 52; OcBGE = 53; OcBLE = 54; OcBGT = 55;
-
-
-TYPE
-
-
-  Gen = RECORD
-    mode : INTEGER;
-    type : INTEGER;
-    size : INTEGER;
-    level : INTEGER;
-    reg : INTEGER;
-    addr1 : INTEGER;
-    addr2 : INTEGER;
-    cond : INTEGER;
-    expConst : BOOLEAN
-  END;
+IMPORT Sys, Buf,
+  Base := NPC01B,
+  Scanner := NPC01S,
+  STable := NPC01Y,
+  Gen := NPC01G;
 
 
 VAR
 
-  code : ARRAY 10000 OF INTEGER;
   source : Scanner.Source; (* root module *)
   level : INTEGER; (* level of nested procedures *)
   modules : INTEGER; (* linked list of module symbols *)
   varsize : INTEGER;
-  regs : ARRAY RegGP OF BOOLEAN;
-  pc : INTEGER; (* program counter *)
   entrypoint : INTEGER;
-
-
-(* generator *)
-
-
-PROCEDURE GenInitRegs;
-
-  VAR i : INTEGER;
-
-  BEGIN
-    i := 0;
-    WHILE i < RegGP DO
-      regs[i] := FALSE; i := i + 1
-    END
-  END GenInitRegs;
-
-
-PROCEDURE GenAllocReg(VAR s : Scanner.Source; VAR r : INTEGER);
-
-  VAR r2 : INTEGER;
-
-  BEGIN
-    r := -1; r2 := 0;
-    WHILE r2 < RegGP DO
-      IF regs[r2] THEN
-        r2 := r2 + 1
-      ELSE
-        r := r2;
-        regs[r] := TRUE;
-        r2 := RegGP
-      END
-    END;
-    IF r = -1 THEN
-      Scanner.RaiseError(s, Base.ErrOutOfRegs)
-    END
-  END GenAllocReg;
-
-
-PROCEDURE GenFreeReg(r : INTEGER);
-
-  BEGIN
-    IF r < RegGP THEN
-      regs[r] := FALSE
-    END
-  END GenFreeReg;
-
-
-PROCEDURE GenCheckRegs(VAR s : Scanner.Source);
-
-  VAR r : INTEGER;
-
-  BEGIN
-    r := 0;
-    WHILE r < RegGP DO
-      IF regs[r] THEN
-        Scanner.RaiseError(s, Base.ErrCheckRegs)
-      END;
-      r := r + 1
-    END
-  END GenCheckRegs;
-
-
-PROCEDURE GenAlign(VAR size : INTEGER);
-
-  VAR i : INTEGER; j : INTEGER;
-
-  BEGIN
-    IF size < 0 THEN i := -4 ELSE i := 4 END;
-    j := size MOD i;
-    IF j # 0 THEN
-      size := size + (i - j)
-    END
-  END GenAlign;
-
-
-PROCEDURE GenEmit(instr : INTEGER);
-
-  BEGIN
-    code[pc] := instr; pc := pc + 1
-  END GenEmit;
-
-
-PROCEDURE GenEmitOc1(oc : INTEGER; c : INTEGER);
-
-  BEGIN
-    GenEmit(oc + c * 64)
-  END GenEmitOc1;
-
-
-PROCEDURE GenEmitOc3(oc : INTEGER; a : INTEGER; b : INTEGER; c : INTEGER);
-
-  BEGIN
-    IF (c >= -20000H) & (c < 20000H) THEN
-      GenEmit(oc + a * 64 + b * 1024 + c * 16384)
-    ELSE
-      GenEmit(oc + 16 + a * 64 + b * 1024);
-      GenEmit(c)
-    END
-  END GenEmitOc3;
-
-
-PROCEDURE GenFixLink(l : INTEGER);
-
-  VAR l2 : INTEGER;
-
-  BEGIN
-    WHILE l # 0 DO
-      l2 := code[l];
-      code[l] := l2 MOD 64 + 64 * (pc - l - 1);
-      l := l2 DIV 64
-    END
-  END GenFixLink;
-
-
-PROCEDURE GenMergeLinks(VAR l : INTEGER ; l2 : INTEGER);
-
-  VAR l3 : INTEGER; l4 : INTEGER; l5 : INTEGER; continue : BOOLEAN;
-
-  BEGIN
-    IF l2 # 0 THEN
-      l3 := l2;
-      continue := TRUE;
-      WHILE continue DO
-        code[l3] := l4;
-        l5 := l4 DIV 64;
-        IF l5 = 0 THEN
-          continue := FALSE
-        ELSE
-          l3 := l5
-        END
-      END;
-      code[l3] := l4 + 64 * l;
-      l := l2
-    END
-  END GenMergeLinks;
-
-
-PROCEDURE GenNegCond(VAR c : INTEGER);
-
-  BEGIN
-    IF c = Scanner.TokEq THEN c := Scanner.TokEqN
-    ELSIF c = Scanner.TokEqN THEN c := Scanner.TokEq
-    ELSIF c = Scanner.TokLss THEN c := Scanner.TokGEq
-    ELSIF c = Scanner.TokGEq THEN c := Scanner.TokLss
-    ELSIF c = Scanner.TokLEq THEN c := Scanner.TokGtr
-    ELSIF c = Scanner.TokGtr THEN c := Scanner.TokLEq
-    END
-  END GenNegCond;
-
-
-PROCEDURE GenEmitCondBR(cond : INTEGER; disp : INTEGER; negated : BOOLEAN);
-
-  VAR oc : INTEGER;
-
-  BEGIN
-    IF negated THEN GenNegCond(cond) END;
-    IF cond = Scanner.TokEq THEN oc := OcBEQ
-    ELSIF cond = Scanner.TokEqN THEN oc := OcBNE
-    ELSIF cond = Scanner.TokLss THEN oc := OcBLS
-    ELSIF cond = Scanner.TokGEq THEN oc := OcBGE
-    ELSIF cond = Scanner.TokLEq THEN oc := OcBLE
-    ELSIF cond = Scanner.TokGtr THEN oc := OcBGT
-    END;
-    GenEmitOc1(oc, disp)
-  END GenEmitCondBR;
-
-
-PROCEDURE GenBCall(l : INTEGER);
-
-  BEGIN
-    GenEmitOc1(OcCALL, -l - pc - 1)
-  END GenBCall;
-
-
-PROCEDURE GenFCall(VAR l : INTEGER);
-
-  BEGIN
-    GenEmitOc1(OcCALL, -l);
-    l := -(pc - 1)
-  END GenFCall;
-
-
-PROCEDURE GenBJump(l : INTEGER);
-
-  BEGIN
-    GenEmitOc1(OcJUMP, l - pc - 1)
-  END GenBJump;
-
-
-PROCEDURE GenFJump(VAR l : INTEGER);
-
-  BEGIN
-    GenEmitOc1(OcJUMP, l);
-    l := pc - 1
-  END GenFJump;
-
-
-PROCEDURE GenEnter(varsize : INTEGER);
-
-  BEGIN
-    GenEmitOc3(OcPSH, RegRT, RegSP, -4);
-    GenEmitOc3(OcPSH, RegFP, RegSP, -4);
-    GenEmitOc3(OcMOV, RegFP, 0, RegSP);
-    IF varsize # 0 THEN
-      GenEmitOc3(OcADDI, RegSP, RegSP, varsize)
-    END
-  END GenEnter;
-
-
-PROCEDURE GenReturn(parsize : INTEGER);
-
-  BEGIN
-    GenEmitOc3(OcMOV, RegSP, 0, RegFP);
-    GenEmitOc3(OcPOP, RegFP, RegSP, 4);
-    GenEmitOc3(OcPOP, RegPC, RegSP, 4 + parsize)
-  END GenReturn;
-
-
-PROCEDURE GenMake(VAR s : Scanner.Source; VAR g : Gen;
-                  VAR y : STable.Symbol);
-
-  VAR r : INTEGER;
-
-  BEGIN
-    g.mode := y.class;
-    g.type := y.type;
-    g.size := STable.types[y.type].size;
-    g.level := y.level;
-    g.addr1 := y.value;
-    g.addr2 := y.value2;
-    IF g.level = 0 THEN
-      g.reg := RegGP
-    ELSE
-      g.reg := RegFP
-    END;
-    WHILE g.addr2 > 0 DO
-      GenAllocReg(s, r);
-      GenEmitOc3(OcLDW, r, g.reg, g.addr1);
-      GenFreeReg(g.reg);
-      g.reg := r;
-      g.addr1 := 0; (* --> GenParam, GenAddr *)
-      g.addr2 := g.addr2 - 1
-    END
-  END GenMake;
-
-
-PROCEDURE GenLoad(VAR s : Scanner.Source; VAR g : Gen);
-
-  VAR r : INTEGER;
-
-  BEGIN
-    IF g.mode # ModeReg THEN
-      IF g.mode = STable.ClassConst THEN
-        GenAllocReg(s, g.reg);
-        GenEmitOc3(OcMOVI, g.reg, 0, g.addr1)
-      ELSIF g.mode = STable.ClassVar THEN
-        GenAllocReg(s, r);
-        IF g.size = 1 THEN
-          GenEmitOc3(OcLDB, r, g.reg, g.addr1)
-        ELSE
-          GenEmitOc3(OcLDW, r, g.reg, g.addr1)
-        END;
-        GenFreeReg(g.reg);
-        g.reg := r
-      ELSIF g.mode = ModeCond THEN
-        GenEmitCondBR(g.cond, 2, TRUE);
-        GenFreeReg(g.reg);
-        GenFixLink(g.addr2);
-        GenAllocReg(s, g.reg);
-        GenEmitOc3(OcMOVI, g.reg, 0, 1);
-        GenEmitOc1(OcJUMP, 1);
-        GenFixLink(g.addr1);
-        GenEmitOc3(OcMOVI, g.reg, 0, 0)
-      END;
-      g.mode := ModeReg
-    END
-  END GenLoad;
-
-
-PROCEDURE GenLoadCond(VAR s : Scanner.Source; VAR g : Gen);
-
-  BEGIN
-    IF g.mode # ModeCond THEN
-      GenLoad(s, g);
-      GenEmitOc3(OcCMPI, g.reg, g.reg, 0);
-      GenFreeReg(g.reg); GenCheckRegs(s);
-      g.mode := ModeCond;
-      g.addr1 := 0;
-      g.addr2 := 0;
-      g.cond := Scanner.TokEqN
-    END
-  END GenLoadCond;
-
-
-PROCEDURE GenCondFJump(VAR s : Scanner.Source; VAR g : Gen);
-
-  BEGIN
-    GenLoadCond(s, g);
-    GenEmitCondBR(g.cond, g.addr1, TRUE);
-    GenFreeReg(g.reg);
-    GenFixLink(g.addr2);
-    g.addr1 := pc - 1;
-    GenCheckRegs(s)
-  END GenCondFJump;
-
-
-PROCEDURE GenStore(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
-
-  BEGIN
-    GenLoad(s, g2);
-    IF g.size = 1 THEN
-      GenEmitOc3(OcSTB, g2.reg, g.reg, g.addr1)
-    ELSE
-      GenEmitOc3(OcSTW, g2.reg, g.reg, g.addr1)
-    END;
-    GenFreeReg(g2.reg); GenFreeReg(g.reg); GenCheckRegs(s)
-  END GenStore;
-
-
-PROCEDURE GenParam(VAR s : Scanner.Source; VAR g : Gen; isRef : BOOLEAN);
-
-  VAR r : INTEGER;
-
-  BEGIN
-    IF isRef THEN (* ref param *)
-      IF g.mode = STable.ClassVar THEN
-        IF g.addr1 = 0 (* -->GenMake *) THEN
-          r := g.reg
-        ELSE
-          GenAllocReg(s, r);
-          GenEmitOc3(OcADDI, r, g.reg, g.addr1);
-          GenFreeReg(g.reg)
-        END;
-        GenEmitOc3(OcPSH, r, RegSP, -4);
-        GenFreeReg(r)
-      ELSE
-        Scanner.RaiseError(s, Base.ErrNotLValue)
-      END
-    ELSE (* value param *)
-      GenLoad(s, g);
-      GenEmitOc3(OcPSH, g.reg, RegSP, -4)
-    END;
-    GenFreeReg(g.reg); GenCheckRegs(s)
-  END GenParam;
-
-
-PROCEDURE GenField(VAR g : Gen; VAR y : STable.Symbol);
-
-  BEGIN
-    g.addr1 := g.addr1 + y.value
-  END GenField;
-
-
-PROCEDURE GenIndex(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
-
-  VAR size : INTEGER;
-
-  BEGIN
-    size := STable.types[STable.types[g.type].value].size;
-    IF g2.mode = STable.ClassConst THEN
-      IF (g2.addr1 >= 0) &
-         (g2.addr1 < STable.types[g.type].len) THEN
-        g.addr1 := g.addr1 + g2.addr1 * size
-      ELSE
-        Scanner.RaiseError(s, Base.ErrBadIndex)
-      END
-    ELSE
-      GenLoad(s, g2);
-      IF size > 1 THEN
-        GenEmitOc3(OcMULI, g2.reg, g2.reg, size)
-      END;
-      GenEmitOc3(OcADD, g2.reg, g2.reg, g.reg);
-      GenFreeReg(g.reg);
-      g.reg := g2.reg
-    END
-  END GenIndex;
-
-
-PROCEDURE GenOp(VAR s : Scanner.Source; op : INTEGER; VAR g : Gen; VAR g2 : Gen);
-
-  BEGIN
-    GenLoad(s, g);
-    IF g2.mode = STable.ClassConst THEN
-      GenEmitOc3(op + 8, g.reg, g.reg, g2.addr1)
-    ELSE
-      GenLoad(s, g2);
-      GenEmitOc3(op, g.reg, g.reg, g2.reg);
-      GenFreeReg(g2.reg)
-    END
-  END GenOp;
-
-
-PROCEDURE GenOp1(VAR s : Scanner.Source; VAR g : Gen; op : INTEGER);
-
-  VAR l : INTEGER;
-
-  BEGIN
-    IF op = Scanner.TokMinus THEN
-      IF g.mode = STable.ClassVar THEN
-        GenLoad(s, g)
-      END;
-      GenEmitOc3(OcMVN, g.reg, 0, g.reg)
-    ELSIF op = Scanner.TokTilde THEN
-      IF g.mode = STable.ClassConst THEN
-        IF g.addr1 = 1 THEN g.addr1 := 0 ELSE g.addr1 := 1 END
-      ELSE
-        GenLoadCond(s, g); GenNegCond(g.cond);
-        l := g.addr1; g.addr1 := g.addr2; g.addr2 := l
-      END
-    ELSIF op = Scanner.TokAmper THEN
-      GenLoadCond(s, g);
-      GenEmitCondBR(g.cond, g.addr1, TRUE);
-      GenFreeReg(g.reg);
-      g.addr1 := pc - 1;
-      GenFixLink(g.addr2);
-      g.addr2 := 0
-    ELSIF op = Scanner.TokOr THEN
-      GenLoadCond(s, g);
-      GenEmitCondBR(g.cond, g.addr2, FALSE);
-      GenFreeReg(g.reg);
-      g.addr2 := pc - 1;
-      GenFixLink(g.addr1);
-      g.addr1 := 0
-    END
-  END GenOp1;
-
-
-PROCEDURE GenOp2(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen; op : INTEGER);
-
-  BEGIN
-    IF STable.types[g.type].form = STable.FormInt THEN
-      IF op = Scanner.TokAsterisk THEN GenOp(s, OcMUL, g, g2)
-      ELSIF op = Scanner.TokDiv THEN GenOp(s, OcDIV, g, g2)
-      ELSIF op = Scanner.TokMod THEN GenOp(s, OcMOD, g, g2)
-      ELSIF op = Scanner.TokPlus THEN GenOp(s, OcADD, g, g2)
-      ELSIF op = Scanner.TokMinus THEN GenOp(s, OcSUB, g, g2)
-      END
-    ELSE (* STable.FormBool *)
-      IF (g.mode = STable.ClassConst) & (g2.mode = STable.ClassConst) THEN
-        IF op = Scanner.TokOr THEN
-          IF (g.addr1 = 1) OR (g2.addr1 = 1) THEN
-            g.addr1 := 1
-          ELSE
-            g.addr1 := 0
-          END
-        ELSE (* Scanner.TokAmper *)
-          IF (g.addr1 = 1) & (g2.addr1 = 1) THEN
-            g.addr1 := 1
-          ELSE
-            g.addr1 := 0
-          END
-        END
-      ELSE
-        GenLoadCond(s, g2);
-        IF op = Scanner.TokOr THEN
-          g.addr1 := g2.addr1;
-          GenMergeLinks(g.addr2, g2.addr2)
-        ELSE (* Scanner.TokAmper *)
-          GenMergeLinks(g.addr1, g2.addr1);
-          g.addr2 := g2.addr2
-        END;
-        g.cond := g2.cond
-      END
-    END
-  END GenOp2;
-
-
-PROCEDURE GenRel(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen; op : INTEGER);
-
-  BEGIN
-    GenOp(s, OcCMP, g, g2);
-    g.cond := op;
-    g.mode := ModeCond;
-    g.addr1 := 0;
-    g.addr2 := 0;
-    GenFreeReg(g.reg); GenCheckRegs(s)
-  END GenRel;
-
-
-PROCEDURE GenSys(VAR s : Scanner.Source; call : INTEGER; VAR g : Gen; VAR g2 : Gen);
-
-  VAR r : INTEGER;
-
-  BEGIN
-    GenLoad(s, g2);
-    GenAllocReg(s, r);
-    GenEmitOc3(OcSYS, r, g2.reg, call);
-    GenEmitOc3(OcSTW, r, g.reg, g.addr1);
-    GenFreeReg(r);
-    GenFreeReg(g.reg);
-    GenFreeReg(g2.reg)
-  END GenSys;
-
-
-PROCEDURE GenAddr(VAR s : Scanner.Source; VAR g : Gen);
-
-  VAR r : INTEGER;
-
-  BEGIN
-    IF g.mode = STable.ClassVar THEN
-      IF g.addr1 # 0 (* -->GenMake *) THEN
-        GenAllocReg(s, r);
-        GenEmitOc3(OcADDI, r, g.reg, g.addr1);
-        GenFreeReg(g.reg);
-        g.reg := r
-      END;
-      g.mode := ModeReg
-    ELSE
-      Scanner.RaiseError(s, Base.ErrNotLValue)
-    END
-  END GenAddr;
-
-
-PROCEDURE GenCreateFile;
-
-  CONST FileOpenModeWrite = 2;
-
-  VAR filename : INTEGER; file : INTEGER; n : INTEGER;
-
-  BEGIN
-    Sys.GetArg(filename, 1);
-    Sys.OpenFile(file, filename, FileOpenModeWrite);
-    Sys.WriteFile(n, file, ADDR(code), pc * 4);
-    Sys.CloseFile(file)
-  END GenCreateFile;
-
-
-(* parser *)
 
 
 PROCEDURE parse;
@@ -599,7 +38,7 @@ PROCEDURE parse;
     END accept;
 
 
-  PROCEDURE checkBool(VAR s : Scanner.Source; VAR g : Gen);
+  PROCEDURE checkBool(VAR s : Scanner.Source; VAR g : Gen.Gen);
 
     BEGIN
       IF STable.types[g.type].form # STable.FormBool THEN
@@ -608,7 +47,7 @@ PROCEDURE parse;
     END checkBool;
 
 
-  PROCEDURE checkChar(VAR s : Scanner.Source; VAR g : Gen);
+  PROCEDURE checkChar(VAR s : Scanner.Source; VAR g : Gen.Gen);
 
     BEGIN
       IF STable.types[g.type].form # STable.FormChar THEN
@@ -617,7 +56,7 @@ PROCEDURE parse;
     END checkChar;
 
 
-  PROCEDURE checkInt(VAR s : Scanner.Source; VAR g : Gen);
+  PROCEDURE checkInt(VAR s : Scanner.Source; VAR g : Gen.Gen);
 
     BEGIN
       IF STable.types[g.type].form # STable.FormInt THEN
@@ -693,12 +132,12 @@ PROCEDURE parse;
     END identUse;
 
 
-  PROCEDURE expr(VAR s : Scanner.Source; VAR g : Gen);
+  PROCEDURE expr(VAR s : Scanner.Source; VAR g : Gen.Gen);
 
-    VAR op : INTEGER; g2 : Gen;
+    VAR op : INTEGER; g2 : Gen.Gen;
 
 
-    PROCEDURE Op1(VAR s : Scanner.Source; VAR g : Gen; op : INTEGER);
+    PROCEDURE Op1(VAR s : Scanner.Source; VAR g : Gen.Gen; op : INTEGER);
 
       BEGIN
         IF op = Scanner.TokMinus THEN
@@ -709,16 +148,16 @@ PROCEDURE parse;
               Scanner.RaiseError(s, Base.ErrIntOverflow)
             END
           ELSE
-            GenOp1(s, g, op)
+            Gen.Op1(s, g, op)
           END
         END
       END Op1;
 
 
-    PROCEDURE Op2(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+    PROCEDURE Op2(VAR s : Scanner.Source; VAR g : Gen.Gen; VAR g2 : Gen.Gen; op : INTEGER);
 
 
-      PROCEDURE mul(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
+      PROCEDURE mul(VAR s : Scanner.Source; VAR g : Gen.Gen; VAR g2 : Gen.Gen);
 
         VAR isNeg : BOOLEAN; i : INTEGER;
 
@@ -745,7 +184,7 @@ PROCEDURE parse;
         END mul;
 
 
-      PROCEDURE div(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
+      PROCEDURE div(VAR s : Scanner.Source; VAR g : Gen.Gen; VAR g2 : Gen.Gen);
 
         BEGIN
           IF g2.addr1 = 0 THEN
@@ -756,7 +195,7 @@ PROCEDURE parse;
         END div;
 
 
-      PROCEDURE mod(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
+      PROCEDURE mod(VAR s : Scanner.Source; VAR g : Gen.Gen; VAR g2 : Gen.Gen);
 
         BEGIN
           IF g2.addr1 = 0 THEN
@@ -767,7 +206,7 @@ PROCEDURE parse;
         END mod;
 
 
-      PROCEDURE add(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
+      PROCEDURE add(VAR s : Scanner.Source; VAR g : Gen.Gen; VAR g2 : Gen.Gen);
 
         BEGIN
           IF Sys.MaxInt - g2.addr1 < g.addr1 THEN
@@ -778,7 +217,7 @@ PROCEDURE parse;
         END add;
 
 
-      PROCEDURE sub(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
+      PROCEDURE sub(VAR s : Scanner.Source; VAR g : Gen.Gen; VAR g2 : Gen.Gen);
 
         BEGIN
           IF Sys.MinInt + g2.addr1 > g.addr1 THEN
@@ -799,32 +238,32 @@ PROCEDURE parse;
             ELSIF op = Scanner.TokMinus THEN sub(s, g, g2)
             END
           ELSE
-            GenOp2(s, g, g2, op)
+            Gen.Op2(s, g, g2, op)
           END
         ELSE
-          GenOp2(s, g, g2, op)
+          Gen.Op2(s, g, g2, op)
         END
       END Op2;
 
 
-    PROCEDURE simpleExpr(VAR s : Scanner.Source; VAR g : Gen);
+    PROCEDURE simpleExpr(VAR s : Scanner.Source; VAR g : Gen.Gen);
 
-      VAR op : INTEGER; g2 : Gen;
-
-
-      PROCEDURE term(VAR s : Scanner.Source; VAR g : Gen);
-
-        VAR op : INTEGER; g2 : Gen;
+      VAR op : INTEGER; g2 : Gen.Gen;
 
 
-        PROCEDURE factor(VAR s : Scanner.Source; VAR g : Gen);
+      PROCEDURE term(VAR s : Scanner.Source; VAR g : Gen.Gen);
+
+        VAR op : INTEGER; g2 : Gen.Gen;
+
+
+        PROCEDURE factor(VAR s : Scanner.Source; VAR g : Gen.Gen);
 
           VAR y : INTEGER;
 
 
-          PROCEDURE selector(VAR s : Scanner.Source; VAR g : Gen);
+          PROCEDURE selector(VAR s : Scanner.Source; VAR g : Gen.Gen);
 
-            VAR g2 : Gen; y : INTEGER;
+            VAR g2 : Gen.Gen; y : INTEGER;
 
             BEGIN
               WHILE (s.token = Scanner.TokBrackL) OR
@@ -835,7 +274,7 @@ PROCEDURE parse;
                     g2.expConst := FALSE;
                     expr(s, g2);
                     checkInt(s, g2);
-                    GenIndex(s, g, g2);
+                    Gen.Index(s, g, g2);
                     accept(s, Scanner.TokBrackR);
                     g.type := STable.types[g.type].value;
                     g.size := STable.types[g.type].size
@@ -851,7 +290,7 @@ PROCEDURE parse;
                     IF y # STable.Marker THEN
                       g.type := STable.symbols[y].type;
                       g.size := STable.types[STable.symbols[y].type].size;
-                      GenField(g, STable.symbols[y])
+                      Gen.Field(g, STable.symbols[y])
                     ELSE
                       Scanner.RaiseError(s, Base.ErrIdentUndef)
                     END
@@ -864,7 +303,7 @@ PROCEDURE parse;
             END selector;
 
 
-          PROCEDURE stdFunc(VAR s : Scanner.Source; VAR g : Gen; VAR y : STable.Symbol);
+          PROCEDURE stdFunc(VAR s : Scanner.Source; VAR g : Gen.Gen; VAR y : STable.Symbol);
 
             BEGIN
               Scanner.Next(s);
@@ -873,7 +312,7 @@ PROCEDURE parse;
               g.expConst := FALSE;
               expr(s, g);
               IF y.value = 1 (* ADDR *) THEN
-                GenAddr(s, g);
+                Gen.Addr(s, g);
                 g.type := STable.intType
               ELSIF y.value = 2 (* CHR *) THEN
                 checkInt(s, g);
@@ -913,7 +352,7 @@ PROCEDURE parse;
               IF STable.symbols[y].class = STable.ClassFunc THEN
                 stdFunc(s, g, STable.symbols[y])
               ELSE
-                GenMake(s, g, STable.symbols[y]);
+                Gen.Make(s, g, STable.symbols[y]);
                 Scanner.Next(s);
                 selector(s, g)
               END
@@ -926,7 +365,7 @@ PROCEDURE parse;
               Scanner.Next(s);
               factor(s, g);
               checkBool(s, g);
-              GenOp1(s, g, Scanner.TokTilde)
+              Gen.Op1(s, g, Scanner.TokTilde)
             ELSE
               Scanner.RaiseError(s, Base.ErrFactorExp)
             END
@@ -944,7 +383,7 @@ PROCEDURE parse;
               checkInt(s, g)
             ELSE
               checkBool(s, g);
-              GenOp1(s, g, op)
+              Gen.Op1(s, g, op)
             END;
             Scanner.Next(s);
             g2.expConst := FALSE;
@@ -979,7 +418,7 @@ PROCEDURE parse;
             checkInt(s, g)
           ELSE
             checkBool(s, g);
-            GenOp1(s, g, op)
+            Gen.Op1(s, g, op)
           END;
           Scanner.Next(s);
           g2.expConst := FALSE;
@@ -1004,7 +443,7 @@ PROCEDURE parse;
           g2.expConst := FALSE;
           simpleExpr(s, g2);
           IF g.type = g2.type THEN
-            GenRel(s, g, g2, op);
+            Gen.Rel(s, g, g2, op);
             g.type := STable.boolType;
             g.size := STable.types[STable.boolType].size
           ELSE
@@ -1019,7 +458,7 @@ PROCEDURE parse;
 
   PROCEDURE constExpr(VAR s : Scanner.Source; VAR i : INTEGER);
 
-    VAR g : Gen;
+    VAR g : Gen.Gen;
 
     BEGIN
       g.expConst := TRUE;
@@ -1063,7 +502,7 @@ PROCEDURE parse;
           typeDef(s, y, t, STable.ClassField);
           STable.SymbolValue(y, addr);
           addr := addr + STable.types[t].size;
-          GenAlign(addr)
+          Gen.Align(addr)
         END field;
 
 
@@ -1126,7 +565,7 @@ PROCEDURE parse;
 
       PROCEDURE sys(VAR s : Scanner.Source);
 
-        VAR call : INTEGER; g : Gen; g2 : Gen;
+        VAR call : INTEGER; g : Gen.Gen; g2 : Gen.Gen;
 
         BEGIN
           Scanner.Next(s); accept(s, Scanner.TokParenL);
@@ -1140,7 +579,7 @@ PROCEDURE parse;
             g2.expConst := FALSE;
             expr(s, g2);
             checkInt(s, g2);
-            GenSys(s, call, g, g2);
+            Gen.SysCall(s, call, g, g2);
             accept(s, Scanner.TokParenR); Scanner.Next(s)
           ELSE
             Scanner.RaiseError(s, Base.ErrNotLValue)
@@ -1150,7 +589,7 @@ PROCEDURE parse;
 
       PROCEDURE assign(VAR s : Scanner.Source);
 
-        VAR g : Gen; g2 : Gen;
+        VAR g : Gen.Gen; g2 : Gen.Gen;
 
         BEGIN
           expr(s, g);
@@ -1159,7 +598,7 @@ PROCEDURE parse;
             g2.expConst := FALSE;
             expr(s, g2);
             IF g.type = g2.type THEN
-              GenStore(s, g, g2)
+              Gen.Store(s, g, g2)
             ELSE
               Scanner.RaiseError(s, Base.ErrIncompTypes)
             END
@@ -1176,14 +615,14 @@ PROCEDURE parse;
 
         PROCEDURE param(VAR s : Scanner.Source; VAR y : INTEGER);
 
-          VAR g : Gen;
+          VAR g : Gen.Gen;
 
           BEGIN
             g.expConst := FALSE;
             expr(s, g);
             IF (y # STable.Marker) & (STable.symbols[y].value > 0) THEN
               IF STable.symbols[y].type = g.type THEN
-                GenParam(s, g, STable.symbols[y].value2 = 1)
+                Gen.Param(s, g, STable.symbols[y].value2 = 1)
               ELSE
                 Scanner.RaiseError(s, Base.ErrIncompTypes)
               END
@@ -1206,9 +645,9 @@ PROCEDURE parse;
           END;
           IF (y = STable.Marker) OR (STable.symbols[y].value < 0) THEN
             IF proc.value = Sys.MinInt THEN (* forward call *)
-              GenFCall(proc.value2)
+              Gen.FCall(proc.value2)
             ELSE (* backward call *)
-              GenBCall(proc.value)
+              Gen.BCall(proc.value)
             END
           ELSE
             Scanner.RaiseError(s, Base.ErrParamsTooFew)
@@ -1218,52 +657,52 @@ PROCEDURE parse;
 
       PROCEDURE if(VAR s : Scanner.Source);
 
-        VAR g : Gen; l : INTEGER;
+        VAR g : Gen.Gen; l : INTEGER;
 
         BEGIN
           Scanner.Next(s);
           g.expConst := FALSE;
           expr(s, g);
           checkBool(s, g);
-          GenCondFJump(s, g);
+          Gen.CondFJump(s, g);
           accept(s, Scanner.TokThen); Scanner.Next(s); stmts(s);
           l := 0;
           WHILE s.token = Scanner.TokElsif DO
-            GenFJump(l);
-            GenFixLink(g.addr1);
+            Gen.FJump(l);
+            Gen.FixLink(g.addr1);
             Scanner.Next(s);
             expr(s, g);
             checkBool(s, g);
-            GenCondFJump(s, g);
+            Gen.CondFJump(s, g);
             accept(s, Scanner.TokThen); Scanner.Next(s); stmts(s)
           END;
           IF s.token = Scanner.TokElse THEN
-            GenFJump(l);
-            GenFixLink(g.addr1);
+            Gen.FJump(l);
+            Gen.FixLink(g.addr1);
             Scanner.Next(s); stmts(s)
           ELSE
-            GenFixLink(g.addr1)
+            Gen.FixLink(g.addr1)
           END;
-          GenFixLink(l);
+          Gen.FixLink(l);
           accept(s, Scanner.TokEnd); Scanner.Next(s)
         END if;
 
 
       PROCEDURE while(VAR s : Scanner.Source);
 
-        VAR g : Gen; l : INTEGER;
+        VAR g : Gen.Gen; l : INTEGER;
 
         BEGIN
           Scanner.Next(s);
-          l := pc;
+          l := Gen.pc;
           g.expConst := FALSE;
           expr(s, g);
           checkBool(s, g);
-          GenCondFJump(s, g);
+          Gen.CondFJump(s, g);
           accept(s, Scanner.TokDo);
           Scanner.Next(s); stmts(s);
-          GenBJump(l);
-          GenFixLink(g.addr1);
+          Gen.BJump(l);
+          Gen.FixLink(g.addr1);
           accept(s, Scanner.TokEnd); Scanner.Next(s)
         END while;
 
@@ -1285,7 +724,7 @@ PROCEDURE parse;
         ELSE
           Scanner.RaiseError(s, Base.ErrStmtExp)
         END;
-        GenCheckRegs(s)
+        Gen.CheckRegs(s)
       END stmt;
 
 
@@ -1335,7 +774,7 @@ PROCEDURE parse;
         WHILE s.token = Scanner.TokIdent DO
           typeDef(s, y, t, STable.ClassVar);
           size := STable.types[t].size;
-          GenAlign(size);
+          Gen.Align(size);
           addr := addr - size;
           STable.SymbolValue(y, addr);
           accept(s, Scanner.TokSemic); Scanner.Next(s)
@@ -1396,10 +835,10 @@ PROCEDURE parse;
         varsize := 0;
         decls(s, varsize);
         IF STable.symbols[y].value = Sys.MinInt THEN
-          GenFixLink(-STable.symbols[y].value2)
+          Gen.FixLink(-STable.symbols[y].value2)
         END;
-        STable.SymbolValue(y, -pc);
-        GenEnter(varsize);
+        STable.SymbolValue(y, -Gen.pc);
+        Gen.Enter(varsize);
         accept(s, Scanner.TokBegin); Scanner.Next(s); stmts(s);
         accept(s, Scanner.TokEnd); Scanner.Next(s); accept(s, Scanner.TokIdent);
         STable.CompIdent(eq, STable.symbols[y].name, s.ident);
@@ -1412,7 +851,7 @@ PROCEDURE parse;
           STable.DeallocScope(STable.symbols[lastParam].next, FALSE);
           STable.SymbolNext(lastParam, STable.Marker)
         END;
-        GenReturn(parsize);
+        Gen.Return(parsize);
         STable.PopTopScope;
         level := level - 1
       END proc;
@@ -1534,7 +973,7 @@ PROCEDURE parse;
         Scanner.Next(s); imports(s)
       END;
       decls(s, varsize);
-      entrypoint := pc;
+      entrypoint := Gen.pc;
       IF s.token = Scanner.TokBegin THEN
         IF STable.symbols[yModule].value2 = 0 (* root module *) THEN
           Scanner.Next(s); stmts(s)
@@ -1560,7 +999,7 @@ PROCEDURE parse;
 
 
 BEGIN
-  level := 0; pc := 0; varsize := 0;
+  level := 0; varsize := 0;
   source.line := 0; source.pos := 0; source.name.len := 0;
   Scanner.OpenSource(source, 0 (* from args *));
   IF source.file = 0 THEN
@@ -1568,10 +1007,9 @@ BEGIN
   END;
   Scanner.Initialize; STable.Initialize;
   STable.AllocSymbol(source, STable.ClassScope, level);
-  STable.InitUniverse(source); GenInitRegs; parse;
+  STable.InitUniverse(source); Gen.Init; parse;
   STable.DeallocScope(STable.topScope, FALSE) (* universe *);
   Scanner.CloseSource(source);
-  GenEmitOc3(OcPOP, RegPC, RegSP, 0);
-  GenEmit(varsize); GenEmit(entrypoint * 4);
-  GenCreateFile
+  Gen.Epilog(varsize, entrypoint * 4);
+  Gen.CreateFile
 END NPC01.

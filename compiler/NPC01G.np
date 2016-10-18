@@ -1,0 +1,582 @@
+MODULE NPC01G (* generator *);
+
+IMPORT Sys, Scanner := NPC01S, STable := NPC01Y;
+
+
+CONST
+
+  ModeReg = 10; ModeCond = 11;
+
+  RegGP = 11; (* global pointer *)
+  RegFP = 12; (* frame pointer *)
+  RegSP = 13; (* stack pointer *)
+  RegRT = 14; (* return register *)
+  RegPC = 15; (* program counter *)
+
+  OcMOV = 8; OcMVN = 9; OcCMP = 10; OcMOVI = 16; OcCMPI = 18; 
+  OcMUL = 11; OcDIV = 12; OcMOD = 13; OcADD = 14; OcSUB = 15;
+  OcMULI =19; OcADDI = 22; 
+  OcLDB = 24; OcLDW = 25; OcSTB = 26; OcSTW = 27; OcPOP = 28; OcPSH = 29;
+  OcSYS = 31; OcJUMP = 48; OcCALL = 49;
+  OcBEQ = 50; OcBNE = 51; OcBLS = 52; OcBGE = 53; OcBLE = 54; OcBGT = 55;
+
+
+TYPE
+
+
+  Gen* = RECORD
+    mode* : INTEGER;
+    type* : INTEGER;
+    size* : INTEGER;
+    level : INTEGER;
+    reg : INTEGER;
+    addr1* : INTEGER;
+    addr2* : INTEGER;
+    cond : INTEGER;
+    expConst* : BOOLEAN
+  END;
+
+
+VAR
+
+  code : ARRAY 10000 OF INTEGER;
+  regs : ARRAY RegGP OF BOOLEAN;
+  pc* : INTEGER; (* program counter *)
+
+
+PROCEDURE Init*;
+
+  VAR i : INTEGER;
+
+  BEGIN
+    i := 0;
+    WHILE i < RegGP DO
+      regs[i] := FALSE; i := i + 1
+    END;
+    pc := 0
+  END Init;
+
+
+PROCEDURE AllocReg(VAR s : Scanner.Source; VAR r : INTEGER);
+
+  VAR r2 : INTEGER;
+
+  BEGIN
+    r := -1; r2 := 0;
+    WHILE r2 < RegGP DO
+      IF regs[r2] THEN
+        r2 := r2 + 1
+      ELSE
+        r := r2;
+        regs[r] := TRUE;
+        r2 := RegGP
+      END
+    END;
+    IF r = -1 THEN
+      Scanner.RaiseError(s, Base.ErrOutOfRegs)
+    END
+  END AllocReg;
+
+
+PROCEDURE FreeReg(r : INTEGER);
+
+  BEGIN
+    IF r < RegGP THEN
+      regs[r] := FALSE
+    END
+  END FreeReg;
+
+
+PROCEDURE CheckRegs*(VAR s : Scanner.Source);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    r := 0;
+    WHILE r < RegGP DO
+      IF regs[r] THEN
+        Scanner.RaiseError(s, Base.ErrCheckRegs)
+      END;
+      r := r + 1
+    END
+  END CheckRegs;
+
+
+PROCEDURE Align*(VAR size : INTEGER);
+
+  VAR i : INTEGER; j : INTEGER;
+
+  BEGIN
+    IF size < 0 THEN i := -4 ELSE i := 4 END;
+    j := size MOD i;
+    IF j # 0 THEN
+      size := size + (i - j)
+    END
+  END Align;
+
+
+PROCEDURE Emit*(instr : INTEGER);
+
+  BEGIN
+    code[pc] := instr; pc := pc + 1
+  END Emit;
+
+
+PROCEDURE EmitOc1(oc : INTEGER; c : INTEGER);
+
+  BEGIN
+    Emit(oc + c * 64)
+  END EmitOc1;
+
+
+PROCEDURE EmitOc3(oc : INTEGER; a : INTEGER; b : INTEGER; c : INTEGER);
+
+  BEGIN
+    IF (c >= -20000H) & (c < 20000H) THEN
+      Emit(oc + a * 64 + b * 1024 + c * 16384)
+    ELSE
+      Emit(oc + 16 + a * 64 + b * 1024);
+      Emit(c)
+    END
+  END EmitOc3;
+
+
+PROCEDURE FixLink*(l : INTEGER);
+
+  VAR l2 : INTEGER;
+
+  BEGIN
+    WHILE l # 0 DO
+      l2 := code[l];
+      code[l] := l2 MOD 64 + 64 * (pc - l - 1);
+      l := l2 DIV 64
+    END
+  END FixLink;
+
+
+PROCEDURE MergeLinks(VAR l : INTEGER ; l2 : INTEGER);
+
+  VAR l3 : INTEGER; l4 : INTEGER; l5 : INTEGER; continue : BOOLEAN;
+
+  BEGIN
+    IF l2 # 0 THEN
+      l3 := l2;
+      continue := TRUE;
+      WHILE continue DO
+        code[l3] := l4;
+        l5 := l4 DIV 64;
+        IF l5 = 0 THEN
+          continue := FALSE
+        ELSE
+          l3 := l5
+        END
+      END;
+      code[l3] := l4 + 64 * l;
+      l := l2
+    END
+  END MergeLinks;
+
+
+PROCEDURE NegCond(VAR c : INTEGER);
+
+  BEGIN
+    IF c = Scanner.TokEq THEN c := Scanner.TokEqN
+    ELSIF c = Scanner.TokEqN THEN c := Scanner.TokEq
+    ELSIF c = Scanner.TokLss THEN c := Scanner.TokGEq
+    ELSIF c = Scanner.TokGEq THEN c := Scanner.TokLss
+    ELSIF c = Scanner.TokLEq THEN c := Scanner.TokGtr
+    ELSIF c = Scanner.TokGtr THEN c := Scanner.TokLEq
+    END
+  END NegCond;
+
+
+PROCEDURE EmitCondBR(cond : INTEGER; disp : INTEGER; negated : BOOLEAN);
+
+  VAR oc : INTEGER;
+
+  BEGIN
+    IF negated THEN NegCond(cond) END;
+    IF cond = Scanner.TokEq THEN oc := OcBEQ
+    ELSIF cond = Scanner.TokEqN THEN oc := OcBNE
+    ELSIF cond = Scanner.TokLss THEN oc := OcBLS
+    ELSIF cond = Scanner.TokGEq THEN oc := OcBGE
+    ELSIF cond = Scanner.TokLEq THEN oc := OcBLE
+    ELSIF cond = Scanner.TokGtr THEN oc := OcBGT
+    END;
+    EmitOc1(oc, disp)
+  END EmitCondBR;
+
+
+PROCEDURE BCall*(l : INTEGER);
+
+  BEGIN
+    EmitOc1(OcCALL, -l - pc - 1)
+  END BCall;
+
+
+PROCEDURE FCall*(VAR l : INTEGER);
+
+  BEGIN
+    EmitOc1(OcCALL, -l);
+    l := -(pc - 1)
+  END FCall;
+
+
+PROCEDURE BJump*(l : INTEGER);
+
+  BEGIN
+    EmitOc1(OcJUMP, l - pc - 1)
+  END BJump;
+
+
+PROCEDURE FJump*(VAR l : INTEGER);
+
+  BEGIN
+    EmitOc1(OcJUMP, l);
+    l := pc - 1
+  END FJump;
+
+
+PROCEDURE Enter*(varsize : INTEGER);
+
+  BEGIN
+    EmitOc3(OcPSH, RegRT, RegSP, -4);
+    EmitOc3(OcPSH, RegFP, RegSP, -4);
+    EmitOc3(OcMOV, RegFP, 0, RegSP);
+    IF varsize # 0 THEN
+      EmitOc3(OcADDI, RegSP, RegSP, varsize)
+    END
+  END Enter;
+
+
+PROCEDURE Return*(parsize : INTEGER);
+
+  BEGIN
+    EmitOc3(OcMOV, RegSP, 0, RegFP);
+    EmitOc3(OcPOP, RegFP, RegSP, 4);
+    EmitOc3(OcPOP, RegPC, RegSP, 4 + parsize)
+  END Return;
+
+
+PROCEDURE Make*(VAR s : Scanner.Source; VAR g : Gen;
+                VAR y : STable.Symbol);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    g.mode := y.class;
+    g.type := y.type;
+    g.size := STable.types[y.type].size;
+    g.level := y.level;
+    g.addr1 := y.value;
+    g.addr2 := y.value2;
+    IF g.level = 0 THEN
+      g.reg := RegGP
+    ELSE
+      g.reg := RegFP
+    END;
+    WHILE g.addr2 > 0 DO
+      AllocReg(s, r);
+      EmitOc3(OcLDW, r, g.reg, g.addr1);
+      FreeReg(g.reg);
+      g.reg := r;
+      g.addr1 := 0; (* --> Param, Addr *)
+      g.addr2 := g.addr2 - 1
+    END
+  END Make;
+
+
+PROCEDURE Load(VAR s : Scanner.Source; VAR g : Gen);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF g.mode # ModeReg THEN
+      IF g.mode = STable.ClassConst THEN
+        AllocReg(s, g.reg);
+        EmitOc3(OcMOVI, g.reg, 0, g.addr1)
+      ELSIF g.mode = STable.ClassVar THEN
+        AllocReg(s, r);
+        IF g.size = 1 THEN
+          EmitOc3(OcLDB, r, g.reg, g.addr1)
+        ELSE
+          EmitOc3(OcLDW, r, g.reg, g.addr1)
+        END;
+        FreeReg(g.reg);
+        g.reg := r
+      ELSIF g.mode = ModeCond THEN
+        EmitCondBR(g.cond, 2, TRUE);
+        FreeReg(g.reg);
+        FixLink(g.addr2);
+        AllocReg(s, g.reg);
+        EmitOc3(OcMOVI, g.reg, 0, 1);
+        EmitOc1(OcJUMP, 1);
+        FixLink(g.addr1);
+        EmitOc3(OcMOVI, g.reg, 0, 0)
+      END;
+      g.mode := ModeReg
+    END
+  END Load;
+
+
+PROCEDURE LoadCond(VAR s : Scanner.Source; VAR g : Gen);
+
+  BEGIN
+    IF g.mode # ModeCond THEN
+      Load(s, g);
+      EmitOc3(OcCMPI, g.reg, g.reg, 0);
+      FreeReg(g.reg); CheckRegs(s);
+      g.mode := ModeCond;
+      g.addr1 := 0;
+      g.addr2 := 0;
+      g.cond := Scanner.TokEqN
+    END
+  END LoadCond;
+
+
+PROCEDURE CondFJump*(VAR s : Scanner.Source; VAR g : Gen);
+
+  BEGIN
+    LoadCond(s, g);
+    EmitCondBR(g.cond, g.addr1, TRUE);
+    FreeReg(g.reg);
+    FixLink(g.addr2);
+    g.addr1 := pc - 1;
+    CheckRegs(s)
+  END CondFJump;
+
+
+PROCEDURE Store*(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
+
+  BEGIN
+    Load(s, g2);
+    IF g.size = 1 THEN
+      EmitOc3(OcSTB, g2.reg, g.reg, g.addr1)
+    ELSE
+      EmitOc3(OcSTW, g2.reg, g.reg, g.addr1)
+    END;
+    FreeReg(g2.reg); FreeReg(g.reg); CheckRegs(s)
+  END Store;
+
+
+PROCEDURE Param*(VAR s : Scanner.Source; VAR g : Gen; isRef : BOOLEAN);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF isRef THEN (* ref param *)
+      IF g.mode = STable.ClassVar THEN
+        IF g.addr1 = 0 (* -->Make *) THEN
+          r := g.reg
+        ELSE
+          AllocReg(s, r);
+          EmitOc3(OcADDI, r, g.reg, g.addr1);
+          FreeReg(g.reg)
+        END;
+        EmitOc3(OcPSH, r, RegSP, -4);
+        FreeReg(r)
+      ELSE
+        Scanner.RaiseError(s, Base.ErrNotLValue)
+      END
+    ELSE (* value param *)
+      Load(s, g);
+      EmitOc3(OcPSH, g.reg, RegSP, -4)
+    END;
+    FreeReg(g.reg); CheckRegs(s)
+  END Param;
+
+
+PROCEDURE Field*(VAR g : Gen; VAR y : STable.Symbol);
+
+  BEGIN
+    g.addr1 := g.addr1 + y.value
+  END Field;
+
+
+PROCEDURE Index*(VAR s : Scanner.Source; VAR g : Gen; VAR g2 : Gen);
+
+  VAR size : INTEGER;
+
+  BEGIN
+    size := STable.types[STable.types[g.type].value].size;
+    IF g2.mode = STable.ClassConst THEN
+      IF (g2.addr1 >= 0) &
+         (g2.addr1 < STable.types[g.type].len) THEN
+        g.addr1 := g.addr1 + g2.addr1 * size
+      ELSE
+        Scanner.RaiseError(s, Base.ErrBadIndex)
+      END
+    ELSE
+      Load(s, g2);
+      IF size > 1 THEN
+        EmitOc3(OcMULI, g2.reg, g2.reg, size)
+      END;
+      EmitOc3(OcADD, g2.reg, g2.reg, g.reg);
+      FreeReg(g.reg);
+      g.reg := g2.reg
+    END
+  END Index;
+
+
+PROCEDURE Op(VAR s : Scanner.Source; op : INTEGER;
+             VAR g : Gen; VAR g2 : Gen);
+
+  BEGIN
+    Load(s, g);
+    IF g2.mode = STable.ClassConst THEN
+      EmitOc3(op + 8, g.reg, g.reg, g2.addr1)
+    ELSE
+      Load(s, g2);
+      EmitOc3(op, g.reg, g.reg, g2.reg);
+      FreeReg(g2.reg)
+    END
+  END Op;
+
+
+PROCEDURE Op1*(VAR s : Scanner.Source; VAR g : Gen; op : INTEGER);
+
+  VAR l : INTEGER;
+
+  BEGIN
+    IF op = Scanner.TokMinus THEN
+      IF g.mode = STable.ClassVar THEN
+        Load(s, g)
+      END;
+      EmitOc3(OcMVN, g.reg, 0, g.reg)
+    ELSIF op = Scanner.TokTilde THEN
+      IF g.mode = STable.ClassConst THEN
+        IF g.addr1 = 1 THEN g.addr1 := 0 ELSE g.addr1 := 1 END
+      ELSE
+        LoadCond(s, g); NegCond(g.cond);
+        l := g.addr1; g.addr1 := g.addr2; g.addr2 := l
+      END
+    ELSIF op = Scanner.TokAmper THEN
+      LoadCond(s, g);
+      EmitCondBR(g.cond, g.addr1, TRUE);
+      FreeReg(g.reg);
+      g.addr1 := pc - 1;
+      FixLink(g.addr2);
+      g.addr2 := 0
+    ELSIF op = Scanner.TokOr THEN
+      LoadCond(s, g);
+      EmitCondBR(g.cond, g.addr2, FALSE);
+      FreeReg(g.reg);
+      g.addr2 := pc - 1;
+      FixLink(g.addr1);
+      g.addr1 := 0
+    END
+  END Op1;
+
+
+PROCEDURE Op2*(VAR s : Scanner.Source;
+               VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+  BEGIN
+    IF STable.types[g.type].form = STable.FormInt THEN
+      IF op = Scanner.TokAsterisk THEN Op(s, OcMUL, g, g2)
+      ELSIF op = Scanner.TokDiv THEN Op(s, OcDIV, g, g2)
+      ELSIF op = Scanner.TokMod THEN Op(s, OcMOD, g, g2)
+      ELSIF op = Scanner.TokPlus THEN Op(s, OcADD, g, g2)
+      ELSIF op = Scanner.TokMinus THEN Op(s, OcSUB, g, g2)
+      END
+    ELSE (* STable.FormBool *)
+      IF (g.mode = STable.ClassConst) & (g2.mode = STable.ClassConst) THEN
+        IF op = Scanner.TokOr THEN
+          IF (g.addr1 = 1) OR (g2.addr1 = 1) THEN
+            g.addr1 := 1
+          ELSE
+            g.addr1 := 0
+          END
+        ELSE (* Scanner.TokAmper *)
+          IF (g.addr1 = 1) & (g2.addr1 = 1) THEN
+            g.addr1 := 1
+          ELSE
+            g.addr1 := 0
+          END
+        END
+      ELSE
+        LoadCond(s, g2);
+        IF op = Scanner.TokOr THEN
+          g.addr1 := g2.addr1;
+          MergeLinks(g.addr2, g2.addr2)
+        ELSE (* Scanner.TokAmper *)
+          MergeLinks(g.addr1, g2.addr1);
+          g.addr2 := g2.addr2
+        END;
+        g.cond := g2.cond
+      END
+    END
+  END Op2;
+
+
+PROCEDURE Rel*(VAR s : Scanner.Source;
+               VAR g : Gen; VAR g2 : Gen; op : INTEGER);
+
+  BEGIN
+    Op(s, OcCMP, g, g2);
+    g.cond := op;
+    g.mode := ModeCond;
+    g.addr1 := 0;
+    g.addr2 := 0;
+    FreeReg(g.reg); CheckRegs(s)
+  END Rel;
+
+
+PROCEDURE SysCall*(VAR s : Scanner.Source; call : INTEGER;
+               VAR g : Gen; VAR g2 : Gen);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    Load(s, g2);
+    AllocReg(s, r);
+    EmitOc3(OcSYS, r, g2.reg, call);
+    EmitOc3(OcSTW, r, g.reg, g.addr1);
+    FreeReg(r);
+    FreeReg(g.reg);
+    FreeReg(g2.reg)
+  END SysCall;
+
+
+PROCEDURE Addr*(VAR s : Scanner.Source; VAR g : Gen);
+
+  VAR r : INTEGER;
+
+  BEGIN
+    IF g.mode = STable.ClassVar THEN
+      IF g.addr1 # 0 (* -->Make *) THEN
+        AllocReg(s, r);
+        EmitOc3(OcADDI, r, g.reg, g.addr1);
+        FreeReg(g.reg);
+        g.reg := r
+      END;
+      g.mode := ModeReg
+    ELSE
+      Scanner.RaiseError(s, Base.ErrNotLValue)
+    END
+  END Addr;
+
+
+PROCEDURE Epilog*(varsize : INTEGER; entrypoint : INTEGER);
+
+  BEGIN
+    EmitOc3(OcPOP, RegPC, RegSP, 0);
+    Emit(varsize); Emit(entrypoint)
+  END Epilog;
+
+
+PROCEDURE CreateFile*;
+
+  CONST FileOpenModeWrite = 2;
+
+  VAR filename : INTEGER; file : INTEGER; n : INTEGER;
+
+  BEGIN
+    Sys.GetArg(filename, 1);
+    Sys.OpenFile(file, filename, FileOpenModeWrite);
+    Sys.WriteFile(n, file, ADDR(code), pc * 4);
+    Sys.CloseFile(file)
+  END CreateFile;
+
+
+END NPC01G.

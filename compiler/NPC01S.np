@@ -1,4 +1,4 @@
-MODULE NPC01S; (* scanner *)
+MODULE NPC01S (* scanner *);
 
 IMPORT Base := NPC01B;
 
